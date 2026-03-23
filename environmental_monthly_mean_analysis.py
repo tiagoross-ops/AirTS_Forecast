@@ -16,9 +16,9 @@ import logging
 import math
 from pathlib import Path
 
+import h5py
 from matplotlib.backends.backend_pdf import PdfPages
 import pandas as pd
-import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -27,25 +27,29 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def var_description_by_month(month_file: Path, verbose: bool = False) -> None:
+def var_description_by_month(
+        month_file: Path,
+        verbose: bool = False
+) -> dict[str, pd.DataFrame]:
     """
     Reads 3D climate data, validates HDF5 structure, calculates temporal means,
-    and generates a single window containing 3D surface subplots.
+    and returns a dictionary of formatted 2D spatial DataFrames.
+
+    Returns:
+        dict: Format is { 'variable_name': pd.DataFrame(mean_2d) }
     """
     if not month_file.exists():
         logger.error(f"Target file does not exist: {month_file.absolute()}")
         return
 
-    # List to store successfully validated and extracted data
-    valid_plots_data = []
+    # Dictionary to store the successfully extracted DataFrames
+    valid_plots_data = {}
+    file_names = []
 
-    # --- PASS 1: Data Extraction and Validation ---
     try:
         with h5py.File(month_file, mode="r") as h5f:
-
-            # 1. Type Checking: Strictly isolate h5py.Dataset objects
-            # This automatically ignores groups like '_coordinates'
             main_vars = [key for key in h5f.keys() if isinstance(h5f[key], h5py.Dataset)]
+            file_names.append(h5f.name)
 
             if not main_vars:
                 logger.warning(f"No valid HDF5 Datasets found in the root of {month_file.name}.")
@@ -53,53 +57,41 @@ def var_description_by_month(month_file: Path, verbose: bool = False) -> None:
 
             for var in main_vars:
                 try:
-                    # 2. Key Validation: Ensure coordinate group exists
                     coord_group_name = f"{var}_coordinates"
                     if coord_group_name not in h5f:
-                        logger.warning(f"Skipping '{var}': Coordinate group '{coord_group_name}' not found.")
                         continue
 
                     coord_group = h5f[coord_group_name]
-
-                    # 3. Key Validation: Ensure latitude and longitude exist
                     if 'latitude' not in coord_group or 'longitude' not in coord_group:
-                        logger.warning(f"Skipping '{var}': Missing 'latitude' or 'longitude' in its coordinate group.")
                         continue
 
                     lats = coord_group['latitude'][:]
                     lons = coord_group['longitude'][:]
-
-                    # 4. Dimensionality Validation: Ensure the data is at least 3D (Time, Lat, Lon)
                     ds = h5f[var]
+
                     if len(ds.shape) < 3:
-                        logger.warning(f"Skipping '{var}': Expected 3D tensor, got shape {ds.shape}.")
                         continue
 
-                    # Extract the array and calculate the temporal mean (Axis 0)
-                    data_3d = ds[:]
-                    time_mean_2d = np.nanmean(data_3d, axis=0)
+                    # Suppress the ocean NaN warning and calculate the temporal mean
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", category=RuntimeWarning)
+                        time_mean_2d = np.nanmean(ds[:], axis=0)
 
-                    # 5. Geometry Validation: Ensure the 2D mean matches the coordinate grid size
                     if time_mean_2d.shape != (len(lats), len(lons)):
-                        logger.warning(
-                            f"Skipping '{var}': Shape mismatch. Mean is {time_mean_2d.shape}, "
-                            f"but coordinates dictate ({len(lats)}, {len(lons)})."
-                        )
                         continue
 
-                    # If all checks pass, store the data for plotting
-                    valid_plots_data.append({
-                        'var_name': var,
-                        'mean_2d': time_mean_2d,
-                        'lats': lats,
-                        'lons': lons
-                    })
+                    # Construct the formal Pandas DataFrame
+                    df = pd.DataFrame(time_mean_2d, index=lats, columns=lons)
+                    df.index.name = "Latitude"
+                    df.columns.name = "Longitude"
+
+                    # Store in the dictionary
+                    valid_plots_data[var] = df
 
                     if verbose:
-                        logger.info(f"Successfully validated and processed '{var}'.")
+                        logger.info(f"Successfully validated and extracted '{var}'.")
 
                 except Exception as var_e:
-                    # Catch variable-specific errors so the loop can process the remaining variables
                     logger.error(f"Unexpected error processing variable '{var}': {var_e}")
                     continue
 
@@ -110,38 +102,85 @@ def var_description_by_month(month_file: Path, verbose: bool = False) -> None:
         logger.critical(f"Critical Error during extraction of {month_file.name}: {e}")
         return
 
-    # --- PASS 2: Grid Calculation and Visualization ---
-    num_vars = len(valid_plots_data)
+    return valid_plots_data
 
-    if num_vars == 0:
-        logger.warning(f"No variables passed validation for plotting in {month_file.name}.")
+
+def generate_monthly_visualizations(
+        month_file: Path,
+        verbose: bool = False
+) -> None:
+    """
+    Integration function: Reads a monthly climate file, extracts the spatial
+    DataFrames, and coordinates the generation of interactive 3D visualizations.
+
+    Args:
+        month_file (Path): The path to the target .h5 file.
+        verbose (bool): If True, enables debug logging during extraction.
+    """
+    logger.info(f"Preparing visualizations for {month_file.name}...")
+
+    # 1. Extract the dictionary of DataFrames using the statistics module
+    valid_plots_data = var_description_by_month(month_file, verbose)
+
+    if not valid_plots_data:
+        logger.warning(f"Aborting visualization: No valid data found in {month_file.name}.")
         return
 
-    # Calculate optimal subplot grid
+    # 2. Define the master title for the figure
+    plot_title = f"Monthly Temporal Means: {month_file.stem}"
+
+    # 3. Pass the pure data to the plotting engine
+    plot_generation(valid_plots_data=valid_plots_data, plot_title=plot_title)
+
+
+def plot_generation(
+        valid_plots_data: dict[str, pd.DataFrame],
+        plot_title: str
+):
+    """
+    Generates an interactive 3D plot window with floor contours for all
+    variables provided in the dataset dictionary.
+
+    Args:
+        valid_plots_data (dict[str, pd.DataFrame]): A dictionary mapping variable
+                                                    names to 2D spatial DataFrames.
+        plot_title (str): The master title to display at the top of the figure.
+    """
+    if not valid_plots_data:
+        logger.warning("No data provided to the rendering engine.")
+        return
+
+    num_vars = len(valid_plots_data)
+
+    # 1. Calculate optimal subplot grid
     cols = math.ceil(math.sqrt(num_vars))
     rows = math.ceil(num_vars / cols)
 
-    # Initialize dynamic figure
-    fig = plt.figure(figsize=(6 * cols, 5 * rows))
-    fig.suptitle(f"Monthly Temporal Means: {month_file.stem}", fontsize=16, fontweight='bold')
+    # 2. Initialize dynamic figure
+    fig = plt.figure(figsize=(7 * cols, 6 * rows))
+    fig.suptitle(plot_title, fontsize=16, fontweight='bold')
 
-    # Render each validated dataset
-    for index, plot_data in enumerate(valid_plots_data):
+    # 3. Render each validated dataset
+    for index, (var_name, df) in enumerate(valid_plots_data.items()):
         ax = fig.add_subplot(rows, cols, index + 1, projection='3d')
+
+        # Extract the underlying NumPy arrays from the Pandas DataFrame
+        lats = df.index.values
+        lons = df.columns.values
+        data_2d = df.values
+
+        # Call your 3D surface rendering function (plot_3d_surface_on_axis)
         plot_3d_surface_on_axis(
             ax=ax,
-            lons=plot_data['lons'],
-            lats=plot_data['lats'],
-            data_2d=plot_data['mean_2d'],
-            var_name=plot_data['var_name']
+            lons=lons,
+            lats=lats,
+            data_2d=data_2d,
+            var_name=var_name
         )
 
+    # 4. Finalize layout and display
     plt.tight_layout(rect=(0, 0.03, 1, 0.95))
-    plt.show()
-
-
-import numpy as np
-import matplotlib.pyplot as plt
+    return fig
 
 
 def plot_3d_surface_on_axis(
@@ -154,6 +193,13 @@ def plot_3d_surface_on_axis(
     """
     Renders a 3D surface plot onto a provided Matplotlib Axis,
     and projects a 2D geographical contour onto the lowest XY plane.
+
+    Args:
+        ax (plt.Axes): The specific Matplotlib 3D subplot axis.
+        lons (np.ndarray): 1D array of longitudes.
+        lats (np.ndarray): 1D array of latitudes.
+        data_2d (np.ndarray): 2D array of the variable's temporal means.
+        var_name (str): The name of the variable being plotted.
     """
     # Calculate Z-axis boundaries to place the floor map correctly
     z_max = np.nanmax(data_2d)
@@ -187,7 +233,7 @@ def plot_3d_surface_on_axis(
     ax.set_zlim(floor_z, z_max)
 
     # Format axis labels and title
-    ax.set_title(f"Variable: {var_name}", fontweight='bold', fontsize=12)
+    ax.set_title(f"Variable: {var_name.upper()}", fontweight='bold', fontsize=12)
     ax.set_xlabel("Longitude", labelpad=10)
     ax.set_ylabel("Latitude", labelpad=10)
     ax.set_zlabel("Time Average Value", labelpad=10)
@@ -195,7 +241,7 @@ def plot_3d_surface_on_axis(
     # Attach a color bar mapped to the surface values, linked to the parent figure
     ax.figure.colorbar(surf, ax=ax, shrink=0.5, aspect=15, pad=0.1)
 
-    # Set default camera viewing angle (adjusted slightly to match your period plots)
+    # Set default camera viewing angle
     ax.view_init(elev=25, azim=230)
 
 
@@ -556,8 +602,8 @@ if __name__ == '__main__':
         # 4. Show Interactive 3D Matplotlib Window (Optional)
         # Note: This will pause the script until you manually close the window.
         # It is active by default here, but you can comment it out if running a bulk automated pipeline.
-        var_description_by_month(test_file, verbose=True)
-
+        generate_monthly_visualizations(test_file, verbose=True)
+        plt.show()
         logger.info("Pipeline execution completed successfully.")
 
     else:

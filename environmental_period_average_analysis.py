@@ -12,52 +12,43 @@ for the entire period without overwhelming system memory.
 """
 
 import logging
+import math
+import warnings
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import math
-import matplotlib.pyplot as plt
-
-# Import the monthly calculation function from your existing module
-# Adjust 'Data_Statistics' to match the actual name of your file if different
-from environmental_monthly_mean_analysis import generate_monthly_spatial_average_tables
 from matplotlib.backends.backend_pdf import PdfPages
+
+# --- Import from your existing modules ---
+# (Adjust module names if your files are named differently)
+from environmental_monthly_mean_analysis import (
+    export_stats_to_excel,
+    var_description_by_month,
+    plot_3d_surface_on_axis
+)
 
 # Configure module-level logger
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def generate_period_spatial_average_tables(
+def monthly_directory_iteration(
         data_dir: Path,
         start_year: int,
         start_month: int,
         end_year: int,
         end_month: int,
-        target_variable: str = None,
-        granularity: float = 1.0
-) -> dict[str, dict[str, pd.DataFrame | float]]:
+) -> list[Path]:
     """
-    Calculates aggregated spatial averages across a multi-month period.
-
-    Args:
-        data_dir (Path): Directory containing the monthly .h5 files.
-        start_year (int): Starting year of the period.
-        start_month (int): Starting month.
-        end_year (int): Ending year.
-        end_month (int): Ending month.
-        target_variable (str, optional): Specific variable to analyze.
-        granularity (float): Spatial resolution for the tables in degrees.
-
-    Returns:
-        dict: A nested dictionary containing the aggregated period DataFrames.
+    Scans the target directory and generates an ordered list of valid HDF5 file
+    paths for a specific multi-month period.
     """
     if not data_dir.exists() or not data_dir.is_dir():
         logger.error(f"Data directory not found: {data_dir.absolute()}")
-        return {}
+        return []
 
-    # 1. Generate a list of expected files within the temporal range
     target_files = []
     for y in range(start_year, end_year + 1):
         m_start = start_month if y == start_year else 1
@@ -71,55 +62,109 @@ def generate_period_spatial_average_tables(
 
     if not target_files:
         logger.error("No valid HDF5 files found for the specified period.")
+
+    return target_files
+
+
+def generate_period_spatial_average_tables(
+        data_dir: Path,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+        target_variable: str = None,
+        granularity: float = 1.0
+) -> dict[str, list[pd.DataFrame]]:
+    """
+    Iterates through monthly HDF5 files using `var_description_by_month`,
+    applies spatial coarsening if required, and accumulates them into a list.
+    """
+    target_files = monthly_directory_iteration(
+        data_dir, start_year, start_month, end_year, end_month
+    )
+
+    if not target_files:
         return {}
 
-    # 2. Accumulate the monthly 2D spatial grids
-    # Structure: { 't2m': [df_month1, df_month2, ...], 'stl4': [...] }
     accumulated_grids = {}
 
-    logger.info(f"Initiating period aggregation across {len(target_files)} months...")
+    logger.info(f"Initiating period extraction across {len(target_files)} months...")
 
     for file in target_files:
         logger.debug(f"Extracting spatial grid from {file.name}...")
 
-        # We call your existing monthly function!
-        monthly_stats = generate_monthly_spatial_average_tables(
-            month_file=file,
-            target_variable=target_variable,
-            granularity=granularity
-        )
+        # Extract monthly dataframes using the refactored monthly function
+        monthly_dataframes = var_description_by_month(month_file=file, verbose=False)
 
-        for var, stats in monthly_stats.items():
+        for var, df in monthly_dataframes.items():
+            # Filter by target_variable if specified
+            if target_variable and var != target_variable:
+                continue
+
+            # Apply Spatial Coarsening (Granularity)
+            if granularity:
+                binned_lats = np.round(df.index / granularity) * granularity
+                binned_lons = np.round(df.columns / granularity) * granularity
+
+                df = df.groupby(binned_lats).mean()
+                df = df.T.groupby(binned_lons).mean().T
+
+                df.index = np.round(df.index, 4)
+                df.columns = np.round(df.columns, 4)
+                df.index.name = "Latitude"
+                df.columns.name = "Longitude"
+
+            # Store in accumulation list
             if var not in accumulated_grids:
                 accumulated_grids[var] = []
-            # Extract just the spatial grid (2D DataFrame) and store it
-            accumulated_grids[var].append(stats['spatial_grid'])
 
-    # 3. Calculate the overall period averages
+            accumulated_grids[var].append(df)
+
+    return accumulated_grids
+
+
+def period_averages_calculation(
+        data_dir: Path,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+        target_variable: str = None,
+        granularity: float = 1.0
+) -> dict[str, dict[str, pd.DataFrame | float]]:
+    """
+    Coordinates the extraction of monthly grids and calculates the final
+    mathematical overall period averages (Spatial, Zonal, Meridional, Grand).
+    """
+    accumulated_grids = generate_period_spatial_average_tables(
+        data_dir, start_year, start_month, end_year, end_month, target_variable, granularity
+    )
+
     period_results = {}
+
+    if not accumulated_grids:
+        logger.warning("No accumulated grids to calculate period averages.")
+        return period_results
 
     for var, grid_list in accumulated_grids.items():
         logger.info(f"Calculating final period mathematical averages for '{var}'...")
 
-        # Convert list of DataFrames into a 3D NumPy array (Months x Lat x Lon)
         stacked_grids = np.stack([df.values for df in grid_list], axis=0)
 
-        # Calculate the mean across the Months axis (axis=0)
-        period_mean_values = np.nanmean(stacked_grids, axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            period_mean_values = np.nanmean(stacked_grids, axis=0)
 
-        # Reconstruct the DataFrame using the index and columns from the first month
         period_spatial_grid = pd.DataFrame(
             period_mean_values,
             index=grid_list[0].index,
             columns=grid_list[0].columns
         )
 
-        # Calculate Zonal, Meridional, and Grand means strictly from the period grid
         zonal_mean_df = period_spatial_grid.mean(axis=1).to_frame(name="Period_Zonal_Mean")
         meridional_mean_df = period_spatial_grid.mean(axis=0).to_frame(name="Period_Meridional_Mean")
         grand_mean = float(np.nanmean(period_mean_values))
 
-        # Store in results dictionary
         period_results[var] = {
             "spatial_grid": period_spatial_grid,
             "zonal_mean": zonal_mean_df,
@@ -143,21 +188,17 @@ def print_period_spatial_summaries(
     Retrieves aggregated spatial data for a time period and prints a formatted
     statistical summary to the console.
     """
-    # Disable INFO logging temporarily to prevent the monthly function from spamming the console
     logging.getLogger().setLevel(logging.WARNING)
 
-    # Call the calculation function
-    stats_dictionary = generate_period_spatial_average_tables(
+    stats_dictionary = period_averages_calculation(
         data_dir, start_year, start_month, end_year, end_month, target_variable, granularity
     )
 
-    # Restore logging level
     logging.getLogger().setLevel(logging.INFO)
 
     if not stats_dictionary:
         return {}
 
-    # Print the formatted summaries
     period_str = f"{start_year}/{start_month:02d} to {end_year}/{end_month:02d}"
 
     for var, stats in stats_dictionary.items():
@@ -191,14 +232,8 @@ def plot_period_3d_surfaces(
         period_label: str
 ) -> None:
     """
-    Reads the aggregated period statistics dictionary and generates a single
-    window containing interactive 3D surface subplots for all variables.
-    Projects a 2D map contour of the geographical area (e.g., Italy) onto
-    the lowest XY plane.
-
-    Args:
-        stats_dictionary (dict): Output from generate_period_spatial_average_tables.
-        period_label (str): A descriptive string for the master title.
+    Generates interactive 3D surface subplots for all variables, using the
+    centralized plotting engine.
     """
     if not stats_dictionary:
         logger.warning("No data provided for period 3D plotting.")
@@ -206,83 +241,34 @@ def plot_period_3d_surfaces(
 
     num_vars = len(stats_dictionary)
 
-    # Calculate optimal subplot grid
     cols = math.ceil(math.sqrt(num_vars))
     rows = math.ceil(num_vars / cols)
 
-    # Initialize dynamic figure
     fig = plt.figure(figsize=(7 * cols, 6 * rows))
     fig.suptitle(f"Period Temporal Means: {period_label}", fontsize=16, fontweight='bold')
 
     for index, (var, stats) in enumerate(stats_dictionary.items()):
         logger.info(f"Rendering 3D surface and bottom contour for period variable: {var}")
 
-        # Extract the 2D grid and the coordinates directly from the Pandas DataFrame
         spatial_df = stats["spatial_grid"]
         lats = spatial_df.index.values
         lons = spatial_df.columns.values
         data_2d = spatial_df.values
 
-        # Calculate Z-axis boundaries to place the floor map correctly
-        z_max = np.nanmax(data_2d)
-        z_min = np.nanmin(data_2d)
-        z_range = z_max - z_min
-
-        # Define the floor level (e.g., 10% below the absolute lowest data point)
-        floor_z = z_min - (z_range * 0.1)
-
-        # Create the specific 3D subplot axis for this variable
         ax = fig.add_subplot(rows, cols, index + 1, projection='3d')
 
-        # Create the 2D Cartesian grid required for 3D surfaces
-        lon_grid, lat_grid = np.meshgrid(lons, lats)
-
-        # 1. Render the main 3D surface plot
-        surf = ax.plot_surface(
-            lon_grid, lat_grid, data_2d,
-            cmap='viridis',
-            edgecolor='none',
-            alpha=0.9
+        # Call the unified plotting engine
+        plot_3d_surface_on_axis(
+            ax=ax,
+            lons=lons,
+            lats=lats,
+            data_2d=data_2d,
+            var_name=f"{var} ({period_label})"
         )
 
-        # 2. Render the 2D geographical contour onto the floor (XY plane)
-        # zdir='z' projects it flat, offset drops it to our calculated floor_z
-        ax.contourf(
-            lon_grid, lat_grid, data_2d,
-            zdir='z',
-            offset=floor_z,
-            cmap='viridis',
-            alpha=0.6  # Slightly more transparent to look like a shadow/map
-        )
-
-        # Lock the Z-axis limits so the floor doesn't float into empty space
-        ax.set_zlim(floor_z, z_max)
-
-        # Format axis labels and title
-        ax.set_title(f"Variable: {var}", fontweight='bold', fontsize=12)
-        ax.set_xlabel("Longitude", labelpad=10)
-        ax.set_ylabel("Latitude", labelpad=10)
-        ax.set_zlabel("Period Mean Value", labelpad=10)
-
-        # Attach a color bar
-        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=15, pad=0.1)
-
-        # Set default camera viewing angle
-        ax.view_init(elev=25, azim=230)
-
-    # Adjust layout and display
     plt.tight_layout(rect=(0, 0.03, 1, 0.95))
     plt.show()
 
-
-import logging
-from pathlib import Path
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-
-# Ensure logger is configured
-logger = logging.getLogger(__name__)
 
 def export_period_3d_plots_to_pdf(
         stats_dictionary: dict[str, dict],
@@ -291,28 +277,16 @@ def export_period_3d_plots_to_pdf(
         verbose: bool = False
 ) -> Path:
     """
-    Reads the aggregated period statistics dictionary and saves each variable's
-    3D surface plot as a perfectly centralized page in a PDF document.
-    Projects a 2D geographical contour of the data onto the lowest XY plane.
-
-    Args:
-        stats_dictionary (dict): Output from generate_period_spatial_average_tables.
-        period_label (str): Descriptive string for the title (e.g., "2004 to 2005").
-        output_filename (str | Path): The target PDF file name.
-        verbose (bool): If True, enables debug logging.
-
-    Returns:
-        Path: The absolute path to the generated PDF file.
+    Saves each variable's 3D surface plot as a centralized page in a PDF document
+    using the unified plotting engine.
     """
     if not stats_dictionary:
         logger.warning("No data provided for PDF export.")
         return None
 
-    # 1. Define and create the target directory for PDFs
     target_dir = Path("Exported pdf plots")
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Extract just the file name and append it to the directory
     file_name = Path(output_filename).name
     output_path = target_dir / file_name
 
@@ -322,70 +296,33 @@ def export_period_3d_plots_to_pdf(
         with PdfPages(output_path) as pdf:
             for var, stats in stats_dictionary.items():
 
-                # Standard A4 Landscape sizing for perfect PDF pages
                 fig = plt.figure(figsize=(11.69, 8.27))
                 ax = fig.add_subplot(111, projection='3d')
 
-                # Extract pre-calculated data directly from the dictionary
                 spatial_df = stats["spatial_grid"]
                 lats = spatial_df.index.values
                 lons = spatial_df.columns.values
                 data_2d = spatial_df.values
 
-                # Calculate Z-axis boundaries to place the floor map correctly
-                z_max = np.nanmax(data_2d)
-                z_min = np.nanmin(data_2d)
-                z_range = z_max - z_min
-                floor_z = z_min - (z_range * 0.1)  # Drop the floor 10% below lowest point
-
-                lon_grid, lat_grid = np.meshgrid(lons, lats)
-
-                # 1. Render the main 3D surface
-                surf = ax.plot_surface(
-                    lon_grid, lat_grid, data_2d,
-                    cmap='viridis',
-                    edgecolor='none',
-                    alpha=0.9
+                # Call the unified plotting engine
+                plot_3d_surface_on_axis(
+                    ax=ax,
+                    lons=lons,
+                    lats=lats,
+                    data_2d=data_2d,
+                    var_name=f"{var} ({period_label})"
                 )
 
-                # 2. Render the 2D geographical contour onto the floor (XY plane)
-                ax.contourf(
-                    lon_grid, lat_grid, data_2d,
-                    zdir='z',
-                    offset=floor_z,
-                    cmap='viridis',
-                    alpha=0.6
-                )
-
-                # Lock the Z-axis limits so the floor sits securely at the bottom of the visual box
-                ax.set_zlim(floor_z, z_max)
-
-                # Add a master title to the top of the PDF page
+                # Nudge the master title so it doesn't overlap the plot title
                 fig.suptitle(
-                    f"Period Temporal Mean: {var.upper()}\n({period_label})",
+                    f"Period Temporal Mean: {var.upper()}",
                     fontsize=16,
                     fontweight='bold',
-                    y=0.95 # Nudges the title slightly up to prevent overlap
+                    y=0.96
                 )
 
-                # Format axes
-                ax.set_xlabel("Longitude", labelpad=10)
-                ax.set_ylabel("Latitude", labelpad=10)
-                ax.set_zlabel("Period Mean Value", labelpad=10)
-
-                # Attach colorbar, shrunk to fit the centralized aesthetic
-                fig.colorbar(surf, ax=ax, shrink=0.5, aspect=15, pad=0.1)
-
-                # Set default camera viewing angle
-                ax.view_init(elev=25, azim=230)
-
-                # Enforce tight layout to calculate the absolute bounding box of the graph
                 plt.tight_layout()
-
-                # Save the page with a forced even margin to perfectly centralize it
                 pdf.savefig(fig, bbox_inches='tight', pad_inches=0.5)
-
-                # CRITICAL: Close the figure to free memory
                 plt.close(fig)
 
                 if verbose:
@@ -400,32 +337,30 @@ def export_period_3d_plots_to_pdf(
 
 
 if __name__ == '__main__':
-    # Define target directory and period bounds
     target_directory = Path("era5_monthly_data")
 
-    # Example Period: March 2004 to December 2005
+    # Example Period: March 2004 to April 2005
     s_year, s_month = 2004, 3
-    e_year, e_month = 2005, 12
+    e_year, e_month = 2005, 4
     period_label_str = f"{s_year}/{s_month:02d} to {e_year}/{e_month:02d}"
 
-    # 1. Execute calculations and print to console
+    # 1. Execute calculations
     period_stats = print_period_spatial_summaries(
         data_dir=target_directory,
         start_year=s_year,
         start_month=s_month,
         end_year=e_year,
         end_month=e_month,
-        granularity=.1
+        granularity=.5 # Set back to 1.0 to prevent massive console output
     )
 
     if period_stats:
-        # 2. Export to Excel (safely reusing the function from environmental_monthly_mean_analysis)
+        # 2. Export to Excel
         try:
-            from environmental_monthly_mean_analysis import export_stats_to_excel
             excel_filename = f"period_stats_{s_year}_{s_month:02d}_to_{e_year}_{e_month:02d}.xlsx"
             export_stats_to_excel(period_stats, output_filename=excel_filename)
-        except ImportError:
-            logger.warning("Could not import export_stats_to_excel. Ensure environmental_monthly_mean_analysis.py is in the same folder.")
+        except Exception as e:
+            logger.error(f"Failed to export Excel: {e}")
 
         # 3. Export to Centralized PDF
         pdf_filename = f"period_visualizations_{s_year}_{s_month:02d}_to_{e_year}_{e_month:02d}.pdf"
@@ -441,13 +376,3 @@ if __name__ == '__main__':
             stats_dictionary=period_stats,
             period_label=period_label_str
         )
-
-    if period_stats:
-        # 2. Export to Excel (reusing the function from the other module)
-        try:
-            from environmental_monthly_mean_analysis import export_stats_to_excel
-            excel_filename = f"period_stats_{s_year}_{s_month:02d}_to_{e_year}_{e_month:02d}.xlsx"
-            export_stats_to_excel(period_stats, output_filename=excel_filename)
-        except ImportError:
-            from environmental_monthly_mean_analysis import export_stats_to_excel
-            logger.warning("Could not import export_stats_to_excel. Skipping Excel export.")
