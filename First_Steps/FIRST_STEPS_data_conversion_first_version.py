@@ -1,6 +1,16 @@
-from Data_Loading import *
-from environmental_data_conversion import *
-import tables
+"""
+AirTS-Forecast Project
+Section 1: Data Gathering and Exploration
+File: FIRST_STEPS_data_conversion_first_version.py
+Author: Tiago TOLOCZKO ROSS
+
+Description:
+Mainly human-made code for testing conversion
+"""
+
+from FIRST_STEPS_Data_Loading import *
+from FIRST_STEPS_environmental_data_conversion import *
+# import tables
 
 monthly_list = []
 

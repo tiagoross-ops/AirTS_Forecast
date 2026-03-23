@@ -1,12 +1,11 @@
 """
-AirTS-Forecast project, Section 1: `Data gathering and exploration`
-
-File: `Data_Loading.py`
-
+AirTS-Forecast Project
+Section 1: Data Gathering and Exploration
+File: FIRST_STEPS_data_conversion.py
 Author: Tiago TOLOCZKO ROSS
 
-Description: Data retrieval and exploration tools adapted for the ERA5-Land databases
-
+Description:
+Mainly human-made code to set some ideas for loading step in data conversion
 """
 import pandas as pd
 import netCDF4 as cd

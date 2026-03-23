@@ -1,13 +1,17 @@
 """
-Basic statistic analysis
+AirTS-Forecast Project
+Section 1: Data Gathering and Exploration
+File: FIRST_STEPS_basic_statistics.py
+Author: Tiago TOLOCZKO ROSS
+
+Description:
+Mainly human-made code to kickstart the basic statistical analysis and set the framework for the AI-generated code
+available in the other files
 """
 
-import pandas as pd
 import numpy as np
 from pathlib import Path
 import h5py
-import calendar
-import matplotlib as plt
 import logging
 
 # Configure module-level logger

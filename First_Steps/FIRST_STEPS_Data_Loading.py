@@ -1,13 +1,11 @@
 """
-AirTS-Forecast project, Section 1: `Data gathering and exploration`
-
-File: `Data_Loading.py`
-
+AirTS-Forecast Project
+Section 1: Data Gathering and Exploration
+File: FIRST_STEPS_data_conversion_first_version.py
 Author: Tiago TOLOCZKO ROSS
 
-Description: Climate variable loading from the European Union's Copernicus Climate Data Store (CDS)
-
-Outputs: a zip folder containing the data files for each variable
+Description:
+Mainly human-made code. First loading module
 
 
 About `AirTS-Forecast` :

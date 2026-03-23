@@ -1,5 +1,15 @@
-from HUMAN_MADE_FILES.Data_Loading import *
-from HUMAN_MADE_FILES.environmental_data_conversion import *
+"""
+AirTS-Forecast Project
+Section 1: Data Gathering and Exploration
+File: FIRST_STEPS_exploration_testing.py
+Author: Tiago TOLOCZKO ROSS
+
+Description:
+Mainly human-made code to set some ideas for loading step in environmental_data_compaction_to_h5.py
+"""
+
+from First_Steps.FIRST_STEPS_Data_Loading import *
+from First_Steps.FIRST_STEPS_environmental_data_conversion import *
 
 monthly_list = []
 for month in range(3,13):
