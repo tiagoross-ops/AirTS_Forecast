@@ -11,124 +11,61 @@ efficiently calculate the overall spatial, zonal, meridional, and grand means
 for the entire period without overwhelming system memory.
 """
 
-import logging
-import math
-import warnings
-from pathlib import Path
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from matplotlib.backends.backend_pdf import PdfPages
 
 # --- Import from your existing modules ---
 # (Adjust module names if your files are named differently)
-from environmental_monthly_mean_analysis import (
-    export_stats_to_excel,
-    var_description_by_month,
-    plot_3d_surface_on_axis
-)
+from environmental_monthly_average_analysis import *
+from environmental_data_retrieval import monthly_data_directory_exploration
 
 # Configure module-level logger
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def monthly_directory_iteration(
+def period_granular_spatial_average_tables(
         data_dir: Path,
-        start_year: int,
-        start_month: int,
-        end_year: int,
-        end_month: int,
-) -> list[Path]:
-    """
-    Scans the target directory and generates an ordered list of valid HDF5 file
-    paths for a specific multi-month period.
-    """
-    if not data_dir.exists() or not data_dir.is_dir():
-        logger.error(f"Data directory not found: {data_dir.absolute()}")
-        return []
-
-    target_files = []
-    for y in range(start_year, end_year + 1):
-        m_start = start_month if y == start_year else 1
-        m_end = end_month if y == end_year else 12
-        for m in range(m_start, m_end + 1):
-            expected_file = data_dir / f"era5_3d_{y}_{m:02d}.h5"
-            if expected_file.exists():
-                target_files.append(expected_file)
-            else:
-                logger.warning(f"Missing expected file in sequence: {expected_file.name}")
-
-    if not target_files:
-        logger.error("No valid HDF5 files found for the specified period.")
-
-    return target_files
-
-
-def generate_period_spatial_average_tables(
-        data_dir: Path,
-        start_year: int,
-        start_month: int,
-        end_year: int,
-        end_month: int,
         target_variable: str = None,
         granularity: float = 1.0
 ) -> dict[str, list[pd.DataFrame]]:
     """
-    Iterates through monthly HDF5 files using `var_description_by_month`,
-    applies spatial coarsening if required, and accumulates them into a list.
+    Leverages the directory explorer to find valid files, and routes them
+    through the monthly aggregation function to extract and accumulate the
+    coarsened spatial grids chronologically.
     """
-    target_files = monthly_directory_iteration(
-        data_dir, start_year, start_month, end_year, end_month
-    )
+    # 1. Fetch valid files utilizing the centralized directory auto-discovery
+    target_files, period_bounds = monthly_data_directory_exploration(data_dir)
 
     if not target_files:
+        logger.warning(f"No valid files found in {data_dir.name} to process for the period.")
         return {}
 
     accumulated_grids = {}
 
-    logger.info(f"Initiating period extraction across {len(target_files)} months...")
+    if period_bounds:
+        s_m, s_y, e_m, e_y = period_bounds
+        logger.info(f"Initiating period extraction across {len(target_files)} months "
+                    f"({s_m:02d}/{s_y} to {e_m:02d}/{e_y})...")
 
+    # 2. Iterate through files and delegate directly to the monthly aggregation function!
     for file in target_files:
-        logger.debug(f"Extracting spatial grid from {file.name}...")
+        logger.debug(f"Processing monthly stats for {file.name}...")
 
-        # Extract monthly dataframes using the refactored monthly function
-        monthly_dataframes = var_description_by_month(month_file=file, verbose=False)
+        # This single call natively handles HDF5 extraction, target filtering, AND spatial coarsening
+        monthly_stats = monthly_granular_spatial_tables(month_file=file, target_variable=target_variable,
+                                                        granularity=granularity)
 
-        for var, df in monthly_dataframes.items():
-            # Filter by target_variable if specified
-            if target_variable and var != target_variable:
-                continue
-
-            # Apply Spatial Coarsening (Granularity)
-            if granularity:
-                binned_lats = np.round(df.index / granularity) * granularity
-                binned_lons = np.round(df.columns / granularity) * granularity
-
-                df = df.groupby(binned_lats).mean()
-                df = df.T.groupby(binned_lons).mean().T
-
-                df.index = np.round(df.index, 4)
-                df.columns = np.round(df.columns, 4)
-                df.index.name = "Latitude"
-                df.columns.name = "Longitude"
-
-            # Store in accumulation list
+        for var, stats in monthly_stats.items():
             if var not in accumulated_grids:
                 accumulated_grids[var] = []
 
-            accumulated_grids[var].append(df)
+            # Extract ONLY the formatted 2D spatial grid (ignoring zonal/meridional/grand for now)
+            accumulated_grids[var].append(stats["spatial_grid"])
 
     return accumulated_grids
 
 
 def period_averages_calculation(
         data_dir: Path,
-        start_year: int,
-        start_month: int,
-        end_year: int,
-        end_month: int,
         target_variable: str = None,
         granularity: float = 1.0
 ) -> dict[str, dict[str, pd.DataFrame | float]]:
@@ -136,9 +73,8 @@ def period_averages_calculation(
     Coordinates the extraction of monthly grids and calculates the final
     mathematical overall period averages (Spatial, Zonal, Meridional, Grand).
     """
-    accumulated_grids = generate_period_spatial_average_tables(
-        data_dir, start_year, start_month, end_year, end_month, target_variable, granularity
-    )
+    accumulated_grids = period_granular_spatial_average_tables(data_dir=data_dir, target_variable=target_variable,
+                                                               granularity=granularity)
 
     period_results = {}
 
@@ -177,29 +113,28 @@ def period_averages_calculation(
 
 def print_period_spatial_summaries(
         data_dir: Path,
-        start_year: int,
-        start_month: int,
-        end_year: int,
-        end_month: int,
         target_variable: str = None,
         granularity: float = 1.0
 ) -> dict[str, dict[str, pd.DataFrame | float]]:
     """
-    Retrieves aggregated spatial data for a time period and prints a formatted
-    statistical summary to the console.
+    Retrieves aggregated spatial data for the auto-discovered time period
+    and prints a formatted statistical summary to the console.
     """
+    # Temporarily suppress lower level logs during calculation
     logging.getLogger().setLevel(logging.WARNING)
-
-    stats_dictionary = period_averages_calculation(
-        data_dir, start_year, start_month, end_year, end_month, target_variable, granularity
-    )
-
+    stats_dictionary = period_averages_calculation(data_dir, target_variable, granularity)
     logging.getLogger().setLevel(logging.INFO)
 
     if not stats_dictionary:
         return {}
 
-    period_str = f"{start_year}/{start_month:02d} to {end_year}/{end_month:02d}"
+    # Fetch the bounds dynamically just to print the master label
+    _, bounds = monthly_data_directory_exploration(data_dir)
+    if bounds:
+        s_m, s_y, e_m, e_y = bounds
+        period_str = f"{s_m:02d}/{s_y} to {e_m:02d}/{e_y}"
+    else:
+        period_str = "Unknown Range"
 
     for var, stats in stats_dictionary.items():
         grand_mean = stats["grand_mean"]
@@ -240,7 +175,6 @@ def plot_period_3d_surfaces(
         return
 
     num_vars = len(stats_dictionary)
-
     cols = math.ceil(math.sqrt(num_vars))
     rows = math.ceil(num_vars / cols)
 
@@ -257,7 +191,6 @@ def plot_period_3d_surfaces(
 
         ax = fig.add_subplot(rows, cols, index + 1, projection='3d')
 
-        # Call the unified plotting engine
         plot_3d_surface_on_axis(
             ax=ax,
             lons=lons,
@@ -277,8 +210,7 @@ def export_period_3d_plots_to_pdf(
         verbose: bool = False
 ) -> Path:
     """
-    Saves each variable's 3D surface plot as a centralized page in a PDF document
-    using the unified plotting engine.
+    Saves each variable's 3D surface plot as a centralized page in a PDF document.
     """
     if not stats_dictionary:
         logger.warning("No data provided for PDF export.")
@@ -286,39 +218,28 @@ def export_period_3d_plots_to_pdf(
 
     target_dir = Path("Exported pdf plots")
     target_dir.mkdir(parents=True, exist_ok=True)
-
-    file_name = Path(output_filename).name
-    output_path = target_dir / file_name
+    output_path = target_dir / Path(output_filename).name
 
     logger.info(f"Generating Period PDF with {len(stats_dictionary)} pages in '{target_dir.name}'...")
 
     try:
         with PdfPages(output_path) as pdf:
             for var, stats in stats_dictionary.items():
-
                 fig = plt.figure(figsize=(11.69, 8.27))
                 ax = fig.add_subplot(111, projection='3d')
 
                 spatial_df = stats["spatial_grid"]
-                lats = spatial_df.index.values
-                lons = spatial_df.columns.values
-                data_2d = spatial_df.values
-
-                # Call the unified plotting engine
                 plot_3d_surface_on_axis(
                     ax=ax,
-                    lons=lons,
-                    lats=lats,
-                    data_2d=data_2d,
+                    lons=spatial_df.columns.values,
+                    lats=spatial_df.index.values,
+                    data_2d=spatial_df.values,
                     var_name=f"{var} ({period_label})"
                 )
 
-                # Nudge the master title so it doesn't overlap the plot title
                 fig.suptitle(
                     f"Period Temporal Mean: {var.upper()}",
-                    fontsize=16,
-                    fontweight='bold',
-                    y=0.96
+                    fontsize=16, fontweight='bold', y=0.96
                 )
 
                 plt.tight_layout()
@@ -336,6 +257,41 @@ def export_period_3d_plots_to_pdf(
         return None
 
 
+def export_monthly_pdfs_in_period(
+        data_dir: Path,
+        verbose: bool = False
+) -> list[Path]:
+    """
+    Iterates over an auto-discovered period of monthly HDF5 files and exports
+    individual, multipage PDF documents containing 3D plots for each month.
+    """
+    # Utilize the directory explorer directly without dates
+    target_files, _ = monthly_data_directory_exploration(data_dir)
+
+    if not target_files:
+        logger.warning("No files found to export for the given period.")
+        return []
+
+    logger.info(f"Starting batch PDF export for {len(target_files)} months...")
+    exported_pdfs = []
+
+    for file in target_files:
+        output_name = f"visualizations_{file.stem}.pdf"
+        logger.info(f"Delegating PDF export for {file.name}...")
+
+        pdf_path = export_3d_plots_to_pdf(
+            month_file=file,
+            output_filename=output_name,
+            verbose=verbose
+        )
+
+        if pdf_path:
+            exported_pdfs.append(pdf_path)
+
+    logger.info(f"Batch export complete! {len(exported_pdfs)} monthly PDFs generated.")
+    return exported_pdfs
+
+
 if __name__ == '__main__':
     target_directory = Path("era5_monthly_data")
 
@@ -347,10 +303,6 @@ if __name__ == '__main__':
     # 1. Execute calculations
     period_stats = print_period_spatial_summaries(
         data_dir=target_directory,
-        start_year=s_year,
-        start_month=s_month,
-        end_year=e_year,
-        end_month=e_month,
         granularity=.5 # Set back to 1.0 to prevent massive console output
     )
 
@@ -376,3 +328,14 @@ if __name__ == '__main__':
             stats_dictionary=period_stats,
             period_label=period_label_str
         )
+
+        # 5. Batch Export Individual Monthly PDFs
+        #logger.info("\n--- Starting Batch Monthly PDF Generation ---")
+        #generated_pdfs = export_monthly_pdfs_in_period(
+        #    data_dir=target_directory,
+        #    start_year=s_year,
+        #    start_month=s_month,
+        #    end_year=e_year,
+        #    end_month=e_month,
+        #    verbose=False  # Set to True if you want a line-by-line log of every variable drawn
+        #)

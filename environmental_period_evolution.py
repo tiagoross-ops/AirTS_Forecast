@@ -11,11 +11,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
-import pandas as pd
 
 # Import your existing functions (adjust module names as needed)
-from environmental_period_average_analysis import generate_period_spatial_average_tables
-from environmental_monthly_mean_analysis import plot_3d_surface_on_axis
+from environmental_period_average_analysis import period_granular_spatial_average_tables
+from environmental_monthly_average_analysis import plot_3d_surface_on_axis
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -43,10 +42,7 @@ def var_evolution(
 
     # 2. Extract Data
     try:
-        data_dictionary = generate_period_spatial_average_tables(
-            data_dir, start_year, start_month, end_year, end_month,
-            target_variable, granularity
-        )
+        data_dictionary = period_granular_spatial_average_tables(data_dir, start_year, start_month)
     except Exception as e:
         logger.error(f"Problem exploring directory {data_dir} in the given range: {e}")
         return

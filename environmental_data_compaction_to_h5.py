@@ -190,8 +190,8 @@ def run_era5_etl_pipeline_3d(
 if __name__ == '__main__':
     # Define execution parameters
     year = 2005
-    start_m = 2
-    end_m = 4
+    start_m = 4
+    end_m = 5
     target_output_dir = "era5_monthly_data"
 
     # Execute the master ETL function
