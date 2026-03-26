@@ -282,6 +282,7 @@ def export_monthly_pdfs_in_period(
         pdf_path = export_3d_plots_to_pdf(
             month_file=file,
             output_filename=output_name,
+            retrieval_func=spatial_mean_granular(),
             verbose=verbose
         )
 
