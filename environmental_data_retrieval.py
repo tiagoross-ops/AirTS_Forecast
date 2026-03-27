@@ -296,6 +296,7 @@ def grand_mean_retrieval(
         logger.error(f"Unexpected error processing grand mean for '{var}': {var_e}")
         return None
 
+
 if __name__ == '__main__':
     print("\n" + "="*50)
     print("TESTING MODULE: environmental_data_retrieval.py")
@@ -343,16 +344,18 @@ if __name__ == '__main__':
                 retrieval_func=mock_spatial_retrieval,
                 verbose=True
             )
-
+            grand_mean = file_var_retrieval(
+                month_file=Path(r'C:\Users\Tiago\IdeaProjects\AirTS_Forecast\era5_monthly_data\era5_3d_2004_03.h5'),
+                retrieval_func=grand_mean_retrieval
+            )['d2m'].iat[0,0]
+            print(grand_mean)
+            
             if extracted_vars:
                 logger.info(f"Successfully extracted {len(extracted_vars)} variables using mock injection.\n")
         else:
             logger.warning("No files available to test extraction.\n")
-        grand_mean = file_var_retrieval(
-            month_file=Path(r'C:\Users\Tiago\IdeaProjects\AirTS_Forecast\era5_monthly_data\era5_3d_2004_03.h5'),
-            retrieval_func=grand_mean_retrieval
-        )['d2m'].iat[0,0]
-        print(grand_mean)
+
+
         print("="*50)
         print("TESTING COMPLETE")
         print("="*50 + "\n")

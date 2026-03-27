@@ -13,8 +13,8 @@ import matplotlib.animation as animation
 import numpy as np
 
 # Import your existing functions (adjust module names as needed)
-from environmental_period_average_analysis import period_granular_spatial_average_tables
-from environmental_monthly_average_analysis import plot_3d_surface_on_axis
+from environmental_period_spatial_average_analysis import period_granular_spatial_average_tables
+from environmental_spatial_average_analysis import plot_3d_surface_on_axis
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
