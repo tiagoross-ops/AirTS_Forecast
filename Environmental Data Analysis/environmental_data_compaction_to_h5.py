@@ -189,10 +189,13 @@ def run_era5_etl_pipeline_3d(
 
 if __name__ == '__main__':
     # Define execution parameters
-    year = 2005
-    start_m = 4
-    end_m = 5
-    target_output_dir = "era5_monthly_data"
+
+    #TODO: What if we change the year?
+    year = 2021
+    start_m = 3
+    end_m = 12
+    TARGET_OUTPUT_ROOT_DIR = "Analysis - 02 round"
+    target_output_dir = f"{TARGET_OUTPUT_ROOT_DIR}/era5_monthly_data"
 
     # Execute the master ETL function
     final_directory = run_era5_etl_pipeline_3d(target_year=year, start_month=start_m, end_month=end_m,

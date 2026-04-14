@@ -1,0 +1,55 @@
+AirTS-Forecast Project
+Section 1: Data Gathering and Exploration
+Analysis round: 01
+Author: Tiago TOLOCZKO ROSS
+
+Description:
+First analysis round
+    request = {
+        "variable": [
+            "2m_dewpoint_temperature",
+            "2m_temperature",
+            "skin_temperature",
+            "soil_temperature_level_1",
+            "soil_temperature_level_2",
+            "soil_temperature_level_3",
+            "soil_temperature_level_4",
+            "10m_u_component_of_wind",
+            "10m_v_component_of_wind",
+            "surface_pressure",
+            "forecast_albedo"
+        ],
+        "year": year_str,
+        "month": month_str,
+        "day": day_span,
+        "daily_statistic": "daily_mean",
+        "time_zone": "utc+00:00",
+        "frequency": "1_hourly",
+        "area": [44.5, 10, 42, 14.5],
+        "data_format": "csv",
+    }
+
+Configurations:
+# 1. Target Data
+TARGET_DIRECTORY = Path("era5_monthly_data")
+
+# 2. Global Execution Settings
+OBJECTIVE = 'export'          # Options: 'show' (Interactive Dashboard) or 'export' (PDF Generation)
+SAVE_PNG_BACKUPS = True       # If objective is 'show', also saves 300dpi PNG copies
+VERBOSE_LOGGING = False       # Set to True for deep page-by-page debugging
+
+# 3. Spatial Resolution (Degrees)
+# Note: Animations and 3D plotting require lots of RAM. A coarser grid (e.g., 2.0 or 5.0) is highly recommended.
+SPATIAL_GRANULARITY = .1
+TIMESERIES_GRANULARITY = 2.0
+
+# 4. Pipeline Execution Toggles (Turn specific analyses True/False)
+RUN_SPATIAL_AVERAGES = True
+RUN_REGIONAL_TIMESERIES = True
+RUN_GRAND_MEANS = True
+RUN_ANIMATION_GIF = True     # Set True to generate the .gif evolution
+IMAGE_SIZE = (10,12)
+
+# 5. Output path
+OUTPUT_ROOT_DIR = "Analysis - first round"
+"""

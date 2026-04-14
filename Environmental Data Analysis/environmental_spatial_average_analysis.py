@@ -22,14 +22,16 @@ import pandas as pd
 
 # Explicitly import the retrieval engine and the new orchestrator
 from environmental_data_retrieval import file_var_retrieval, grand_mean_retrieval
-from environmental_data_statistics_exporting import visualization_orchestration
+from environmental_data_visualization_orchestration import visualization_orchestration
 
 # Configure module-level logger
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
-# --- 1. SPATIAL AVERAGE KEY FUNCTIONS ---
+# =============================================================================
+# 1. RETRIEVAL & FACTORY FUNCTIONS
+# =============================================================================
 def granular_spatial_average(
         granularity: float = None
 ) -> Callable[[str, h5py.File | h5py.Group], Optional[pd.DataFrame]]:
@@ -95,40 +97,9 @@ def granular_spatial_average(
 
     return spatial_mean_retrieval
 
-
-def plot_3d_surface_on_axis(
-        ax: plt.Axes,
-        lons: np.ndarray,
-        lats: np.ndarray,
-        data_2d: np.ndarray,
-        var_name: str
-) -> None:
-    """
-    Renders a 3D surface plot onto a provided Matplotlib Axis,
-    and projects a 2D geographical contour onto the lowest XY plane.
-    """
-    z_max = np.nanmax(data_2d)
-    z_min = np.nanmin(data_2d)
-    z_range = z_max - z_min
-
-    # Define the floor level (10% below the absolute lowest data point)
-    floor_z = z_min - (z_range * 0.1) if z_range != 0 else z_min - 1
-
-    lon_grid, lat_grid = np.meshgrid(lons, lats)
-
-    surf = ax.plot_surface(lon_grid, lat_grid, data_2d, cmap='viridis', edgecolor='none', alpha=0.9)
-    ax.contourf(lon_grid, lat_grid, data_2d, zdir='z', offset=floor_z, cmap='viridis', alpha=0.6)
-
-    ax.set_zlim(floor_z, z_max)
-    ax.set_title(f"Variable: {var_name.upper()}", fontweight='bold', fontsize=12)
-    ax.set_xlabel("Longitude", labelpad=10)
-    ax.set_ylabel("Latitude", labelpad=10)
-    ax.set_zlabel("Time Average Value", labelpad=10)
-
-    ax.figure.colorbar(surf, ax=ax, shrink=0.5, aspect=15, pad=0.1)
-    ax.view_init(elev=25, azim=230)
-
-
+# =============================================================================
+# 2. PERIOD OVERALL FUNCTION
+# =============================================================================
 def overall_period_spatial_average(
         period_data_dict: dict[str, list[pd.DataFrame]],
 ) -> dict[str, pd.DataFrame]:
@@ -163,149 +134,43 @@ def overall_period_spatial_average(
     return overall_stats
 
 
-# --- 2. STATISTICAL AGGREGATION ---
-def monthly_granular_spatial_tables(
-        month_file: Path,
-        target_variable: str = None,
-        granularity: float = 1.0
-) -> dict[str, dict[str, pd.DataFrame | float]]:
+# =============================================================================
+# 3. VISUALIZATION ENGINE AND PLOTTING FUNCTIONS
+# =============================================================================
+def plot_3d_surface_on_axis(
+        ax: plt.Axes,
+        lons: np.ndarray,
+        lats: np.ndarray,
+        data_2d: np.ndarray,
+        var_name: str
+) -> None:
     """
-    Calculates aggregated spatial and temporal averages using the centralized
-    data retrieval function. Returns the data as a nested dictionary of DataFrames.
+    Renders a 3D surface plot onto a provided Matplotlib Axis,
+    and projects a 2D geographical contour onto the lowest XY plane.
     """
-    extracted_dataframes = file_var_retrieval(
-        month_file=month_file,
-        retrieval_func=granular_spatial_average(granularity)
-    )
+    z_max = np.nanmax(data_2d)
+    z_min = np.nanmin(data_2d)
+    z_range = z_max - z_min
 
-    if not extracted_dataframes:
-        logger.warning(f"No data available to aggregate in {month_file.name}.")
-        return {}
+    # Define the floor level (10% below the absolute lowest data point)
+    floor_z = z_min - (z_range * 0.1) if z_range != 0 else z_min - 1
 
-    grand_mean_dict = file_var_retrieval(
-        month_file=month_file,
-        retrieval_func=grand_mean_retrieval
-    )
+    lon_grid, lat_grid = np.meshgrid(lons, lats)
 
-    results = {}
+    surf = ax.plot_surface(lon_grid, lat_grid, data_2d, cmap='viridis', edgecolor='none', alpha=0.9)
+    ax.contourf(lon_grid, lat_grid, data_2d, zdir='z', offset=floor_z, cmap='viridis', alpha=0.6)
 
-    for var, coarsened_grid in extracted_dataframes.items():
-        if target_variable and var != target_variable:
-            continue
+    ax.set_zlim(floor_z, z_max)
+    ax.set_title(f"Variable: {var_name.upper()}", fontweight='bold', fontsize=12)
+    ax.set_xlabel("Longitude", labelpad=10)
+    ax.set_ylabel("Latitude", labelpad=10)
+    ax.set_zlabel("Time Average Value", labelpad=10)
 
-        logger.info(f"Aggregating '{var}' at {granularity}° granularity...")
-
-        zonal_mean_df = coarsened_grid.mean(axis=1).to_frame(name="Zonal_Mean")
-        meridional_mean_df = coarsened_grid.mean(axis=0).to_frame(name="Meridional_Mean")
-
-        if var in grand_mean_dict and not grand_mean_dict[var].empty:
-            grand_mean = grand_mean_dict[var].iat[0, 0]
-        else:
-            grand_mean = float('nan')
-
-        results[var] = {
-            "spatial_grid": coarsened_grid,
-            "zonal_mean": zonal_mean_df,
-            "meridional_mean": meridional_mean_df,
-            "grand_mean": grand_mean
-        }
-
-    return results
+    ax.figure.colorbar(surf, ax=ax, shrink=0.5, aspect=15, pad=0.1)
+    ax.view_init(elev=25, azim=230)
 
 
-# --- 3. PRINTING & EXPORTING ---
-def print_monthly_spatial_summaries(
-        month_file: Path,
-        target_variable: str = None,
-        granularity: float = 1.0
-) -> dict[str, dict[str, pd.DataFrame | float]]:
-    """
-    Retrieves aggregated spatial data and prints a formatted statistical
-    summary to the console.
-    """
-    stats_dictionary_for_printing = monthly_granular_spatial_tables(
-        month_file=month_file,
-        target_variable=target_variable,
-        granularity=granularity
-    )
-
-    if not stats_dictionary_for_printing:
-        return {}
-
-    for var, stats in stats_dictionary_for_printing.items():
-        grand_mean = stats["grand_mean"]
-        zonal_mean_df = stats["zonal_mean"]
-        meridional_mean_df = stats["meridional_mean"]
-        coarsened_grid = stats["spatial_grid"]
-
-        print(f"\n{'='*60}")
-        print(f"STATISTICAL SUMMARY: {var.upper()} ({month_file.stem}) | Granularity: {granularity}°")
-        print(f"{'='*60}")
-        print(f"Overall Grand Mean: {grand_mean:.4f}\n")
-
-        print("--- Zonal Averages (By Latitude) ---")
-        print(zonal_mean_df.head(5))
-        print("...\n")
-
-        print("--- Meridional Averages (By Longitude) ---")
-        print(meridional_mean_df.head(5))
-        print("...\n")
-
-        print("--- Spatial Matrix Head (Lat x Lon) ---")
-        print(coarsened_grid.iloc[:5, :5])
-        print("\n")
-
-    return stats_dictionary_for_printing
-
-
-def export_stats_to_excel(
-        stats_dict: dict[str, dict],
-        output_filename: str | Path = "climate_statistics.xlsx"
-) -> Path | None:
-    """
-    Exports the nested statistics dictionary to a multi-sheet Excel workbook.
-    """
-    target_dir = Path(r"Excel exported statistical summaries")
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    file_name = Path(output_filename).name
-    output_path = target_dir / file_name
-
-    summary_data = []
-
-    try:
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            for var, stats in stats_dict.items():
-                spatial_df = stats.get("spatial_grid")
-                if spatial_df is not None:
-                    spatial_df.to_excel(writer, sheet_name=f"{var[:15]}_Spatial")
-
-                zonal_df = stats.get("zonal_mean")
-                if zonal_df is not None:
-                    zonal_df.to_excel(writer, sheet_name=f"{var[:15]}_Zonal")
-
-                meridional_df = stats.get("meridional_mean")
-                if meridional_df is not None:
-                    meridional_df.to_excel(writer, sheet_name=f"{var[:15]}_Meridional")
-
-                grand_mean = stats.get("grand_mean")
-                if grand_mean is not None:
-                    summary_data.append({"Variable": var, "Grand_Mean": grand_mean})
-
-            if summary_data:
-                summary_df = pd.DataFrame(summary_data)
-                summary_df.to_excel(writer, sheet_name="00_Overall_Summary", index=False)
-
-        logger.info(f"Successfully exported statistical tables to {output_path.absolute()}")
-        return output_path
-
-    except Exception as e:
-        logger.error(f"Failed to export to Excel: {e}")
-        return None
-
-
-# --- 4. VISUALIZATION ENGINE --
-def spatial_3d_plotter_factory() -> Callable[[dict[str, pd.DataFrame], str], plt.Figure] | None:
+def spatial_3d_plotter_factory(*args, **kwargs) -> Callable[[dict[str, pd.DataFrame], str], plt.Figure] | None:
     """
     Conforms to the universal orchestrator signature. Accepts a single-variable
     dictionary from the orchestrator loop and generates a standalone 3D plt.Figure.
@@ -320,7 +185,7 @@ def spatial_3d_plotter_factory() -> Callable[[dict[str, pd.DataFrame], str], plt
         # The orchestrator strictly passes 1 variable at a time in its plotting loop
         var_name, df = next(iter(extracted_data.items()))
 
-        fig = plt.figure(figsize=(10, 8))
+        fig = plt.figure(figsize=(10, 8), *args, **kwargs)
         fig.suptitle(plot_title, fontsize=16, fontweight='bold')
         ax = fig.add_subplot(111, projection='3d')
 
@@ -336,7 +201,198 @@ def spatial_3d_plotter_factory() -> Callable[[dict[str, pd.DataFrame], str], plt
 
     return plot_generator
 
+# =============================================================================
+# 4. TABULAR VISUALIZATION AND EXPORTING FUNCTIONS
+# =============================================================================
 
+def calculate_monthly_spatial_statistics(
+        month_file: Path,
+        target_variable: str = None,
+        granularity: float = 1.0
+) -> dict[str, dict[str, pd.DataFrame | float]]:
+    """
+    Calculates aggregated spatial and temporal averages for a specific month.
+
+    Extracts the spatial grid, calculates the zonal mean (latitude), the
+    meridional mean (longitude), and retrieves the overall grand mean.
+
+    Args:
+        month_file (Path): Path to the target monthly .h5 file.
+        target_variable (str, optional): Specific variable to extract. If None,
+                                         processes all available variables.
+        granularity (float, optional): Spatial binning resolution. Defaults to 1.0.
+
+    Returns:
+        dict: A nested dictionary mapped by variable name. Structure:
+              {
+                  "variable_name": {
+                      "spatial_grid": pd.DataFrame,
+                      "zonal_mean": pd.DataFrame,
+                      "meridional_mean": pd.DataFrame,
+                      "grand_mean": float
+                  }
+              }
+    """
+    extracted_dataframes = file_var_retrieval(
+        month_file=month_file,
+        retrieval_func=granular_spatial_average(granularity)
+    )
+
+    if not extracted_dataframes:
+        logger.warning(f"No data available to aggregate in {month_file.name}.")
+        return {}
+
+    grand_mean_dict = file_var_retrieval(
+        month_file=month_file,
+        retrieval_func=grand_mean_retrieval
+    )
+
+    tabular_results_dict = {}
+
+    for var, coarsened_grid in extracted_dataframes.items():
+        if target_variable and var != target_variable:
+            continue
+
+        logger.info(f"Aggregating '{var}' statistics at {granularity}° granularity...")
+
+        # Zonal: Average across longitudes for each latitude
+        zonal_mean_df = coarsened_grid.mean(axis=1).to_frame(name="Zonal_Mean")
+
+        # Meridional: Average across latitudes for each longitude
+        meridional_mean_df = coarsened_grid.mean(axis=0).to_frame(name="Meridional_Mean")
+
+        if var in grand_mean_dict and not grand_mean_dict[var].empty:
+            grand_mean = float(grand_mean_dict[var].iat[0, 0])
+        else:
+            grand_mean = float('nan')
+
+        tabular_results_dict[var] = {
+            "spatial_grid": coarsened_grid,
+            "zonal_mean": zonal_mean_df,
+            "meridional_mean": meridional_mean_df,
+            "grand_mean": grand_mean
+        }
+
+    return tabular_results_dict
+
+
+def print_monthly_spatial_summaries(
+        month_file: Path,
+        target_variable: str = None,
+        granularity: float = 1.0
+) -> dict[str, dict[str, pd.DataFrame | float]]:
+    """
+    Pipeline node that calculates spatial statistics and prints a formatted
+    summary to the console before returning the data dictionary.
+
+    Args:
+        month_file (Path): Path to the target monthly .h5 file.
+        target_variable (str, optional): Specific variable to filter by.
+        granularity (float, optional): Spatial binning resolution. Defaults to 1.0.
+
+    Returns:
+        dict: The fully populated nested statistics dictionary.
+    """
+    stats_dict = calculate_monthly_spatial_statistics(
+        month_file=month_file,
+        target_variable=target_variable,
+        granularity=granularity
+    )
+
+    if not stats_dict:
+        return {}
+
+    for var, stats in stats_dict.items():
+        print(f"\n{'='*60}")
+        print(f"STATISTICAL SUMMARY: {var.upper()} ({month_file.stem}) | Granularity: {granularity}°")
+        print(f"{'='*60}")
+        print(f"Overall Grand Mean: {stats['grand_mean']:.4f}\n")
+
+        print("--- Zonal Averages (By Latitude) ---")
+        print(stats['zonal_mean'].head(5))
+        print("...\n")
+
+        print("--- Meridional Averages (By Longitude) ---")
+        print(stats['meridional_mean'].head(5))
+        print("...\n")
+
+        print("--- Spatial Matrix Head (Lat x Lon) ---")
+        print(stats['spatial_grid'].iloc[:5, :5])
+        print("\n")
+
+    return stats_dict
+
+
+def export_stats_to_excel(
+        stats_dict: dict[str, dict],
+        output_filename: str | Path = "climate_statistics.xlsx",
+        output_dir: str | Path = "Excel exported statistical summaries"
+) -> Path | None:
+    """
+    Exports a nested statistics dictionary to a multi-sheet Excel workbook.
+    Automatically splits distinct data views (Spatial, Zonal, Meridional)
+    into separate sheets and builds an overall Grand Mean summary sheet.
+
+    Args:
+        stats_dict (dict): The nested dictionary generated by calculate_monthly_spatial_statistics.
+        output_filename (str | Path, optional): Name of the final Excel file. Defaults to "climate_statistics.xlsx".
+        output_dir (str | Path, optional): Target directory for the export. Defaults to "Excel exported statistical summaries".
+
+    Returns:
+        Path | None: Absolute path to the generated Excel file, or None if the export fails.
+    """
+    if not stats_dict:
+        logger.warning("No statistics provided to the Excel exporter.")
+        return None
+
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    file_name = Path(output_filename).name
+    output_path = target_dir / file_name
+
+    summary_data = []
+
+    try:
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            for var, stats in stats_dict.items():
+
+                # Excel restricts sheet names to 31 characters.
+                # We slice the variable name to 15 chars to ensure suffix fits safely.
+                safe_var_name = var[:15]
+
+                spatial_df = stats.get("spatial_grid")
+                if spatial_df is not None:
+                    spatial_df.to_excel(writer, sheet_name=f"{safe_var_name}_Spatial")
+
+                zonal_df = stats.get("zonal_mean")
+                if zonal_df is not None:
+                    zonal_df.to_excel(writer, sheet_name=f"{safe_var_name}_Zonal")
+
+                meridional_df = stats.get("meridional_mean")
+                if meridional_df is not None:
+                    meridional_df.to_excel(writer, sheet_name=f"{safe_var_name}_Meridional")
+
+                grand_mean = stats.get("grand_mean")
+                if grand_mean is not None:
+                    summary_data.append({"Variable": var, "Grand_Mean": grand_mean})
+
+            # Create the master summary sheet if grand means exist
+            if summary_data:
+                summary_df = pd.DataFrame(summary_data)
+                summary_df.to_excel(writer, sheet_name="00_Overall_Summary", index=False)
+
+        logger.info(f"Successfully exported statistical tables to {output_path.absolute()}")
+        return output_path
+
+    except Exception as e:
+        logger.error(f"Failed to export to Excel: {e}")
+        return None
+
+
+# =============================================================================
+# 5. EXECUTION BLOCK
+# =============================================================================
 if __name__ == '__main__':
     source_dir = Path("era5_monthly_data")
     test_file = source_dir / "era5_3d_2004_06.h5"
@@ -360,18 +416,18 @@ if __name__ == '__main__':
             )
 
         # 3. PDF Export utilizing the master Orchestrator
-        pdf_filename = f"3d_visualizations_{test_file.stem}.pdf"
-
-        visualization_orchestration(
-            input_path=source_dir,
-            study="Spatial Average",
-            retrieval_func=granular_spatial_average(granularity=alpha),
-            plot_generator_func=spatial_3d_plotter_factory(),
-            overall_analysis=overall_period_spatial_average,
-            objective='export',
-            output_filename=pdf_filename,
-            verbose=True
-        )
+#        pdf_filename = f"3d_visualizations_{test_file.stem}.pdf"
+#
+#        visualization_orchestration(
+#            input_path=source_dir,
+#            study="Spatial Average",
+#            retrieval_func=granular_spatial_average(granularity=alpha),
+#            plot_generator_func=spatial_3d_plotter_factory(),
+#            overall_analysis=overall_period_spatial_average,
+#            objective='export',
+#            output_filename=pdf_filename,
+#            verbose=True
+#        )
 
         # 4. Interactive Display utilizing the master Orchestrator
         logger.info("\nLaunching Interactive Display...")
@@ -382,7 +438,7 @@ if __name__ == '__main__':
             plot_generator_func=spatial_3d_plotter_factory(),
             overall_analysis=overall_period_spatial_average,
             objective='show',
-            verbose=True
+            verbose=False
         )
 
         # 'show' objective returns the active figures to RAM, so we trigger matplotlib here

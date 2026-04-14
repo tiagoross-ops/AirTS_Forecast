@@ -13,7 +13,6 @@ for the entire period without overwhelming system memory.
 """
 
 import logging
-import math
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -25,7 +24,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 # --- Explicit Core Imports ---
 from environmental_data_retrieval import monthly_data_directory_exploration
-from environmental_data_statistics_exporting import pdf_exporting_function
+from environmental_data_visualization_orchestration import pdf_exporting_function
 
 # --- Explicit Analysis Imports ---
 from environmental_spatial_average_analysis import (
@@ -179,7 +178,6 @@ def print_period_spatial_summaries(
     return stats_dictionary
 
 
-# -- PLOTTING ENGINE  --
 def plot_period_3d_surfaces(
         valid_plots_data: dict[str, list[pd.DataFrame] | pd.DataFrame],
         plot_title: str
@@ -269,7 +267,7 @@ def export_period_3d_plots_to_pdf(
         logger.warning("No data provided for PDF export.")
         return None
 
-    target_dir = Path("Exported pdf plots")
+    target_dir = Path("../Exported pdf plots")
     target_dir.mkdir(parents=True, exist_ok=True)
     output_path = target_dir / Path(output_filename).name
 
@@ -307,7 +305,7 @@ def export_period_3d_plots_to_pdf(
 
 
 if __name__ == '__main__':
-    target_directory = Path("era5_monthly_data")
+    target_directory = Path("../era5_monthly_data")
 
     if not target_directory.exists():
         logger.error(f"Cannot run tests: The directory '{target_directory}' does not exist.")

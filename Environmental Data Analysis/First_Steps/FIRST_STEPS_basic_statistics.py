@@ -49,6 +49,6 @@ def var_description_by_month(
 
 
 if __name__ == '__main__':
-    test_file = Path(r'C:\Users\Tiago\IdeaProjects\AirTS_Forecast\era5_monthly_data\era5_3d_2005_03.h5')
+    test_file = Path(r'/Environmental Data Analysis/era5_monthly_data/era5_3d_2005_03.h5')
     var_description_by_month(test_file, verbose=True)
 

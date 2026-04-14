@@ -15,7 +15,7 @@ Fully integrated with the core data retrieval engine and includes automated
 import logging
 import warnings
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
 import h5py
 import matplotlib.dates as mdates
@@ -25,8 +25,8 @@ import pandas as pd
 from scipy.optimize import curve_fit
 
 # Explicitly import the retrieval engine and the new orchestrator
-from environmental_data_retrieval import file_name_comprehension
-from environmental_data_statistics_exporting import visualization_orchestration
+from environmental_data_retrieval import (file_name_comprehension, period_retrieval_function)
+from environmental_data_visualization_orchestration import visualization_orchestration
 
 # Configure module-level logger
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -42,6 +42,7 @@ def timeseries_by_region() -> Callable[[str, h5py.File | h5py.Group], Optional[p
     Simplified retrieval function that strictly extracts native HDF5 data into a
     DataFrame with a proper Time index and a [Latitude, Longitude] MultiIndex.
     """
+
     def retrieval_func(var: str, dataset: h5py.File | h5py.Group) -> Optional[pd.DataFrame]:
         try:
             # Dynamically extract the year and month from the current file's name
@@ -87,6 +88,9 @@ def timeseries_by_region() -> Callable[[str, h5py.File | h5py.Group], Optional[p
     return retrieval_func
 
 
+# =============================================================================
+# 2. PERIOD OVERALL FUNCTION
+# =============================================================================
 def overall_period_timeseries(
         period_data_dict: dict[str, list[pd.DataFrame]],
 ) -> dict[str, pd.DataFrame]:
@@ -115,10 +119,10 @@ def overall_period_timeseries(
 
 
 # =============================================================================
-# 2. MATHEMATICAL MODELING
+# 3. MATHEMATICAL MODELING
 # =============================================================================
 
-def fit_sinusoidal(time_idx: pd.DatetimeIndex, data: pd.Series) -> Optional[tuple[np.ndarray, list]]:
+def fit_sinusoidal(time_idx: pd.DatetimeIndex, data: pd.Series) -> tuple[Any, Any, Any] | None:
     """
     Fits a 12-month period sinusoidal function to the given time-series data.
     """
@@ -147,8 +151,9 @@ def fit_sinusoidal(time_idx: pd.DatetimeIndex, data: pd.Series) -> Optional[tupl
 
         correlation = np.corrcoef(y_valid, y_fit_valid)[0, 1]
 
-        if abs(correlation) > 0.95:
-            return y_fit_full, popt
+        if abs(correlation) > 0.8:
+            # ---> NEW: Return the correlation alongside the fit data <---
+            return y_fit_full, popt.tolist(), correlation
         else:
             return None
 
@@ -158,37 +163,52 @@ def fit_sinusoidal(time_idx: pd.DatetimeIndex, data: pd.Series) -> Optional[tupl
 
 
 # =============================================================================
-# 3. RENDERING ENGINE & FACTORY
+# 4. VISUALIZATION ENGINE & PLOTTING FUNCTIONS
 # =============================================================================
-
 def _populate_timeseries_axis(
         ax: plt.Axes,
         df: pd.DataFrame,
         var: str,
         granularity: float,
-        verbose: bool = False
+        verbose: bool = False,
+
 ) -> None:
     """
     Internal helper function to populate a single Matplotlib axis with regional
     timeseries data, format the grid, and evaluate/print sinusoidal fits.
+    Safely absorbs and applies arbitrary styling arguments to the main data lines.
     """
     time_array = df.index
 
     for region_label in df.columns:
-        line, = ax.plot(time_array, df[region_label], label=region_label, linewidth=1.5, alpha=0.8)
+        # Unpack the merged style dictionary into the main data plot
+        line, = ax.plot(
+            time_array,
+            df[region_label],
+            label=region_label,
+            linewidth=1.5, alpha=0.8
+        )
 
         fit_result = fit_sinusoidal(time_array, df[region_label])
 
         if fit_result is not None:
-            fitted_y, popt = fit_result
-            a, phi, c = popt
-            omega = 2 * np.pi / 365.2425
+            # Inside _populate_timeseries_axis...
+            fit_result = fit_sinusoidal(time_array, df[region_label])
 
-            if verbose:    logger.info(
-                    f"Strong correlation fit for {var.upper()} [{region_label}]: "
-                    f"y(t) = {a:.2f} * sin({omega:.4f}*t + {phi:.2f}) + {c:.2f}"
-                )
+            if fit_result is not None:
+                # ---> NEW: Add the `_` to safely ignore the correlation in the plotter <---
+                fitted_y, popt, corr = fit_result
+                a, phi, c = popt
+                omega = 2 * np.pi / 365.2425
 
+                if verbose:
+                    # We can even include it in our console printout now!
+                    logger.info(
+                        f"Strong correlation ({abs(corr)*100:.1f}%) fit for {var.upper()} [{region_label}]: "
+                        f"y(t) = {a:.2f} * sin({omega:.4f}*t + {phi:.2f}) + {c:.2f}"
+                    )
+
+            # Keep the fitted line visually distinct (dotted) but match the region's color
             ax.plot(
                 time_array, fitted_y,
                 linestyle=':', color=line.get_color(), linewidth=2.0, alpha=0.9
@@ -202,22 +222,25 @@ def _populate_timeseries_axis(
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
     plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
 
-    ax.legend(title=f"Regions ({granularity}° Bins)",
-              bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
+#    ax.legend(title=f"Regions ({granularity}° Bins)",
+#              bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='small')
 
 
 def timeseries_by_region_plotter_factory(
         granularity: float = 1.0,
-        verbose: bool = False
-) -> Callable[[dict[str, pd.DataFrame], str], plt.Figure] | None:
+        verbose: bool = False,
+        *args,
+        **kwargs
+) -> Callable[..., plt.Figure | None]:
     """
     Conforms to the universal orchestrator signature. Accepts a single-variable
     dictionary from the orchestrator loop, applies spatial binning, and
     generates a standalone 2D plt.Figure timeseries.
     """
+
     def plot_generator(
             extracted_data: dict[str, pd.DataFrame],
-            plot_title: str
+            plot_title: str,
     ) -> plt.Figure | None:
 
         if not extracted_data:
@@ -249,9 +272,14 @@ def timeseries_by_region_plotter_factory(
                 coarsened_df.columns = [f"Lat {lat:.1f}°, Lon {lon:.1f}°" for lat, lon in coarsened_df.columns]
 
         # Generate the Plot
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax = plt.subplots(*args, **kwargs)
         fig.suptitle(f"Temporal Evolution: {var.upper()} ({plot_title})", fontsize=16, fontweight='bold')
-        _populate_timeseries_axis(ax, coarsened_df, var, granularity, verbose=verbose)
+
+        # Pass the arbitrary arguments down to the axis populator
+        _populate_timeseries_axis(
+            ax, coarsened_df, var, granularity, verbose=verbose
+        )
+
         plt.tight_layout()
 
         return fig
@@ -260,9 +288,156 @@ def timeseries_by_region_plotter_factory(
 
 
 # =============================================================================
-# 4. EXECUTION BLOCK
+# 5. TABULAR VISUALIZATION AND EXPORTING FUNCTIONS
 # =============================================================================
+def _coarsen_spatial_timeseries(native_df: pd.DataFrame, granularity: float) -> pd.DataFrame:
+    """
+    Internal helper to apply spatial binning to a native MultiIndex timeseries DataFrame.
+    """
+    if granularity and isinstance(native_df.columns, pd.MultiIndex):
+        lats_idx = native_df.columns.get_level_values('Latitude')
+        lons_idx = native_df.columns.get_level_values('Longitude')
 
+        binned_lats = np.round(lats_idx / granularity) * granularity
+        binned_lons = np.round(lons_idx / granularity) * granularity
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            coarsened_df = native_df.T.groupby([binned_lats, binned_lons]).mean().T
+
+        coarsened_df = coarsened_df.dropna(axis=1, how='all')
+        coarsened_df.columns = [f"Lat {lat:.1f}°, Lon {lon:.1f}°" for lat, lon in coarsened_df.columns]
+        return coarsened_df
+
+    elif isinstance(native_df.columns, pd.MultiIndex):
+        coarsened_df = native_df.copy()
+        coarsened_df.columns = [f"Lat {lat:.1f}°, Lon {lon:.1f}°" for lat, lon in coarsened_df.columns]
+        return coarsened_df
+
+    return native_df.copy()
+
+
+def calculate_sinusoidal_statistics(
+        continuous_data_dict: dict[str, pd.DataFrame],
+        granularity: float = 1.0
+) -> dict[str, pd.DataFrame]:
+    """
+    Analyzes the continuous period timeseries, applies spatial binning, and
+    attempts a sinusoidal fit for every region. Filters out regions with weak
+    correlations and returns the mathematical parameters of the successful fits.
+    """
+    stats_dict = {}
+    omega = 2 * np.pi / 365.2425
+
+    for var, native_df in continuous_data_dict.items():
+        logger.info(f"Calculating sinusoidal fits for '{var}' at {granularity}° granularity...")
+
+        binned_df = _coarsen_spatial_timeseries(native_df, granularity)
+        var_stats = []
+
+        for region_label in binned_df.columns:
+            fit_result = fit_sinusoidal(binned_df.index, binned_df[region_label])
+
+            if fit_result is not None:
+                # ---> NEW: Unpack the correlation value <---
+                _, popt, correlation = fit_result
+                a, phi, c = popt
+
+                var_stats.append({
+                    "Region": region_label,
+                    "Correlation (%)": f"{abs(correlation) * 100:.2f}%",  # Format as percentage
+                    "Amplitude (A)": a,
+                    "Phase Shift (phi)": phi,
+                    "Vertical Shift/Mean (C)": c,
+                    "Equation": f"y(t) = {a:.2f} * sin({omega:.4f}*t + {phi:.2f}) + {c:.2f}"
+                })
+
+        if var_stats:
+            stats_df = pd.DataFrame(var_stats).set_index("Region")
+            # Sort by highest correlation first
+            stats_df = stats_df.sort_values(by="Correlation (%)", ascending=False)
+            stats_dict[var] = stats_df
+        else:
+            logger.info(f"No regions in '{var}' met the >0.95 correlation threshold for a seasonal fit.")
+
+    return stats_dict
+
+
+def print_sinusoidal_summaries(
+        continuous_data_dict: dict[str, pd.DataFrame],
+        granularity: float = 1.0
+) -> dict[str, pd.DataFrame]:
+    """
+    Calculates the sinusoidal statistics and prints a clean, formatted
+    summary to the console for quick verification.
+    """
+    stats_dict = calculate_sinusoidal_statistics(continuous_data_dict, granularity)
+
+    if not stats_dict:
+        logger.warning("No significant sinusoidal correlations found to print.")
+        return {}
+
+    for var, df_stats in stats_dict.items():
+        print(f"\n{'='*80}")
+        print(f"SEASONAL FIT SUMMARY: {var.upper()} | Granularity: {granularity}°")
+        print(f"Regions with R > 0.95: {len(df_stats)}")
+        print(f"{'='*80}")
+
+        # Print the top 5 most extreme amplitudes
+        sorted_stats = df_stats.sort_values(by="Amplitude (A)", ascending=False)
+        print(sorted_stats.head(5).to_string())
+        print("...\n")
+
+    return stats_dict
+
+
+def export_sinusoidal_stats_to_excel(
+        stats_dict: dict[str, pd.DataFrame],
+        output_filename: str | Path = "sinusoidal_fit_statistics.xlsx",
+        output_dir: str | Path = "Excel exported statistical summaries"
+) -> Path | None:
+    """
+    Exports the successful sinusoidal fit parameters to a multi-sheet Excel workbook.
+    Each variable gets its own sheet containing the Regions, parameters, and equations.
+
+    Args:
+        stats_dict (dict): The dictionary generated by calculate_sinusoidal_statistics.
+        output_filename (str | Path, optional): Name of the Excel file.
+        output_dir (str | Path, optional): Target directory.
+
+    Returns:
+        Path | None: Absolute path to the generated Excel file.
+    """
+    if not stats_dict:
+        logger.warning("No sinusoidal statistics provided to the Excel exporter.")
+        return None
+
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = target_dir / Path(output_filename).name
+
+    try:
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            for var, df_stats in stats_dict.items():
+
+                # Excel restricts sheet names to 31 characters.
+                safe_var_name = var[:25] + "_Fits"
+
+                # Write the DataFrame, auto-adjusting the region index
+                df_stats.to_excel(writer, sheet_name=safe_var_name)
+
+        logger.info(f"Successfully exported sinusoidal tables to {output_path.absolute()}")
+        return output_path
+
+    except Exception as exc:
+        logger.error(f"Failed to export sinusoidal stats to Excel: {exc}")
+        return None
+
+
+# =============================================================================
+# 6. EXECUTION BLOCK
+# =============================================================================
 if __name__ == '__main__':
     target_dir = Path("era5_monthly_data")
 
@@ -270,32 +445,30 @@ if __name__ == '__main__':
         logger.info(f"\nInitiating Batch Period Timeseries Export on directory: {target_dir.name}...")
 
         try:
-            # 1. PDF Export utilizing the master Orchestrator
+            # 1. Retrieve the multi-month data using your standard retrieval function
+            period_data = period_retrieval_function(target_dir, timeseries_by_region())
+
+            # 2. Stitch it into a continuous dictionary
+            continuous_overall_data = overall_period_timeseries(period_data)
+
+            # 3. Calculate and Export the Tables
+            stats_dict = print_sinusoidal_summaries(continuous_overall_data, granularity=2.0)
+            export_sinusoidal_stats_to_excel(stats_dict)
+
+            # PDF APPLICATION OF THE MASTER ORCHESTRATOR
             exported_files = visualization_orchestration(
                 input_path=target_dir,
                 study="Regional Timeseries",
                 retrieval_func=timeseries_by_region(),
                 plot_generator_func=timeseries_by_region_plotter_factory(granularity=2.0),
                 overall_analysis=overall_period_timeseries,
-                objective='export',
+                objective='show',
                 output_dir="Exported timeseries plots",
                 verbose=False
             )
 
             if exported_files:
-                logger.info(f"\nSUCCESS: Pipeline completed. Generated {len(exported_files)} PDF reports.")
-
-            # 2. Interactive Display utilizing the master Orchestrator
-            logger.info("\nLaunching Interactive Display (Showing continuous Overall plots)...")
-            visualization_orchestration(
-                input_path=target_dir,
-                study="Regional Timeseries",
-                retrieval_func=timeseries_by_region(),
-                plot_generator_func=timeseries_by_region_plotter_factory(granularity=2.0),
-                overall_analysis=overall_period_timeseries,
-                objective='show',
-                verbose=False
-            )
+                logger.info(f"\nSUCCESS: Pipeline completed!!")
 
             # 'show' objective returns the active continuous figures to RAM, so we trigger matplotlib here
             plt.show()

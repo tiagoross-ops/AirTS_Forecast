@@ -345,7 +345,7 @@ if __name__ == '__main__':
                 verbose=True
             )
             grand_mean = file_var_retrieval(
-                month_file=Path(r'C:\Users\Tiago\IdeaProjects\AirTS_Forecast\era5_monthly_data\era5_3d_2004_03.h5'),
+                month_file=Path(r'/Environmental Data Analysis/era5_monthly_data\era5_3d_2004_03.h5'),
                 retrieval_func=grand_mean_retrieval
             )['d2m'].iat[0,0]
             print(grand_mean)

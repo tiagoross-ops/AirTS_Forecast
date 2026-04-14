@@ -213,7 +213,7 @@ def environmental_data_conversion_era5_to_3d(
 if __name__ == '__main__':
     # Implementation example
     # Define target folder using raw string for Windows paths or Path object
-    target_folder = Path(r'C:\Users\Tiago\IdeaProjects\AirTS_Forecast\stored_monthly_data\2004_05_01-31')
+    target_folder = Path(r'/stored_monthly_data/2004_05_01-31')
 
     # Execute conversion with verbose logging enabled
     result_data = environmental_data_conversion_era5_to_dfs(target_folder, verbose=True)

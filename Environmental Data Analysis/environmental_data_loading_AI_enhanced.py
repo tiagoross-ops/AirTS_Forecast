@@ -83,7 +83,7 @@ def era5_land_importing_by_date(
         "daily_statistic": "daily_mean",
         "time_zone": "utc+00:00",
         "frequency": "1_hourly",
-        "area": [44.5, 10, 42, 14.5],
+        "area": [43.7, 1.4, 43.5, 1.5],
         "data_format": "csv",
     }
 
@@ -98,7 +98,7 @@ def era5_land_importing_by_date(
     logger.debug(f"Target archive: {target_zip.name}")
 
     try:
-        # Initialize CDS API client. Credentials must be stored locally in ~/.cdsapirc
+        # Initialize CDS API client
         client = cdsapi.Client(url='https://cds.climate.copernicus.eu/api',
                                key='3897f715-96aa-4900-8608-156a4476eae5')
         # Execute the retrieval request
