@@ -9,23 +9,32 @@ Description:
     visualizations on pollutant concentration datasets. Implements
     vectorized temporal resampling, outlier remediation, and Fourier Transform
     analysis for cyclical trend detection.
+
+
+    Insee Department Code: 31
+    Insee Region Code: 76
+    ZAS Code: FR76ZAG01
+    Start Date: 21/03/2021 00:01
+    End Date: 21/03/2026 00:01
+    Data type: a1
 """
 
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.animation import FuncAnimation
 
 # --- CONSTANTS & CONFIGURATION ---
 DATA_DIRECTORY = Path(r"C:\Users\Tiago\Documents - PC\UTTOP\Enseignements\M1.2\Projet AirTS - Forecast\GEODAIR_POLLUTION_DATA")
-TARGET_FILENAME = "PM10_20210321_20260321.csv"
-PERIODICITY = "monthly"  # Options: 'hourly', 'daily', 'weekly', 'monthly', 'annually'
+TARGET_FILENAME = "PM25_20210321_20260321.csv"
+PERIODICITY = "hourly"  # Options: 'hourly', 'daily', 'weekly', 'monthly', 'annually'
 
 ANALYSIS_KWARGS = {
     "sep": ";",
@@ -40,9 +49,9 @@ ANALYSIS_KWARGS = {
     "xlabel": "Observation Timestamp",
     "ylabel": "Concentration (µg/m³)",
 
-    "animate": True,                                  # Toggles animation routing
+    "animate": False,                                  # Toggles animation routing
     "animation_filepath": "NO2_Weekly_Trend.gif",     # Output destination
-    "fps": 12                                         # Rendering speed
+    "fps": 108                                         # Rendering speed
 }
 
 # --- METADATA & INGESTION ---
@@ -229,7 +238,7 @@ def visualize_pollution_scatter(
         data_series: pd.Series,
         title: str,
         **kwargs: Any
-) -> Optional[plt.Figure]:
+) -> tuple[Any, FuncAnimation] | None | Any:
     """
     Standardized scatter/line plot generation with optional timeseries animation.
 
@@ -326,7 +335,7 @@ def visualize_pollution_scatter(
             logging.error(f"ANIMATION_ERROR: Failed to save animation. Details: {e}")
 
         # Return the figure object so the Orchestrator can execute plt.close(fig)
-        return fig
+        return fig, anim
 
 
 def visualize_outlier_diagnostics(raw_series: pd.Series, outlier_mask: pd.Series, title: str, **kwargs: Any) -> plt.Figure:
@@ -386,12 +395,25 @@ def main() -> None:
         logging.error("Process aborted: Empty dataset.")
         return
 
-    # 3. Clean Visualization
-    clean_fig = visualize_pollution_scatter(
-        clean_series, title=f"Cleaned {PERIODICITY.capitalize()} Trend: {meta['pollutant']}", **ANALYSIS_KWARGS
-    )
-    plt.show()
-    plt.close(clean_fig)
+    # 3. Clean Visualization Routing (Static vs Animated)
+    is_animated = ANALYSIS_KWARGS.get("animate", False)
+    title_str = f"Cleaned {PERIODICITY.capitalize()} Trend: {meta['pollutant']}"
+
+    if is_animated:
+        # We must capture the 'anim' object to prevent garbage collection during plt.show()
+        clean_fig, anim = visualize_pollution_scatter(
+            clean_series, title=title_str, **ANALYSIS_KWARGS
+        )
+        logging.info("ORCHESTRATOR: Rendering animation. Close the window to proceed.")
+        plt.show()
+        plt.close(clean_fig)
+    else:
+        # Standard static figure handling
+        clean_fig = visualize_pollution_scatter(
+            clean_series, title=title_str, **ANALYSIS_KWARGS
+        )
+        plt.show()
+        plt.close(clean_fig)
 
     # 4. Fourier Transform Analysis
     periods, amps, fft_summary = extract_fourier_indicators(

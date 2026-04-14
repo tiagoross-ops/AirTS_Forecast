@@ -143,11 +143,11 @@ def map_italy_grid_classification(
 
 if __name__ == '__main__':
     # Define bounding box (covering Italy roughly)
-    grid_min_lat = 42.0
-    grid_max_lat = 44.5
-    grid_min_lon = 10.5
-    grid_max_lon = 14.5
-    target_resolution = 2 # Increased for visual clarity in testing
+    grid_min_lat = 43.5
+    grid_max_lat = 43.7
+    grid_min_lon = 1.4
+    grid_max_lon = 1.5
+    target_resolution = 1 # Increased for visual clarity in testing
 
     # Execute the filter
     filtered_italy_grid = get_italy_grid_coordinates(
