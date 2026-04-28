@@ -192,7 +192,7 @@ if __name__ == '__main__':
 
     #TODO: What if we change the year?
     year = 2021
-    start_m = 3
+    start_m = 10
     end_m = 12
     TARGET_OUTPUT_ROOT_DIR = "Analysis - 02 round"
     target_output_dir = f"{TARGET_OUTPUT_ROOT_DIR}/era5_monthly_data"

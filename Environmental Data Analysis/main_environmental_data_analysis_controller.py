@@ -15,6 +15,7 @@ Centralizes configuration and execution for all analysis modules:
 
 import logging
 from pathlib import Path
+from matplotlib import pyplot as plt
 
 # --- Import Master Orchestrators & Retrieval ---
 from environmental_data_retrieval import period_retrieval_function, grand_mean_retrieval
@@ -62,7 +63,7 @@ logger = logging.getLogger("AirTS_Controller")
 # =============================================================================
 
 # 1. Target Data
-TARGET_DIRECTORY = Path("era5_monthly_data")
+TARGET_DIRECTORY = Path("Analysis - 02 round/era5_monthly_data")
 
 # 2. Global Execution Settings
 OBJECTIVE = 'show'          # Options: 'show' (Interactive Dashboard) or 'export' (PDF Generation)
@@ -72,17 +73,17 @@ VERBOSE_LOGGING = False       # Set to True for deep page-by-page debugging
 # 3. Spatial Resolution (Degrees)
 # Note: Animations and 3D plotting require lots of RAM. A coarser grid (e.g., 2.0 or 5.0) is highly recommended.
 SPATIAL_GRANULARITY = .1
-TIMESERIES_GRANULARITY = .5
+TIMESERIES_GRANULARITY = .1
 
 # 4. Pipeline Execution Toggles (Turn specific analyses True/False)
 RUN_SPATIAL_AVERAGES = False
-RUN_REGIONAL_TIMESERIES = False
+RUN_REGIONAL_TIMESERIES = True
 RUN_GRAND_MEANS = False
-RUN_ANIMATION_GIF = True     # Set True to generate the .gif evolution
+RUN_ANIMATION_GIF = False     # Set True to generate the .gif evolution
 IMAGE_SIZE = (10,12)
 
 # 5. Output path
-OUTPUT_ROOT_DIR = "Analysis - first round"
+OUTPUT_ROOT_DIR = "Analysis - 02 round"
 # =============================================================================
 # PIPELINE EXECUTION ENGINE
 # =============================================================================
@@ -200,7 +201,7 @@ def run_environmental_analysis():
     # Trigger Matplotlib display if 'show' was selected and visualizations were generated
     if OBJECTIVE == 'show':
         logger.info("Opening active interactive dashboards...")
-
+        plt.show()
 
 if __name__ == '__main__':
     run_environmental_analysis()
