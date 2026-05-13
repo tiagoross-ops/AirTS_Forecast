@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AirTS-Forecast | Interactive Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<header class="navbar">
+    <div class="logo">AirTS-Forecast <span>Dashboard</span></div>
+    <div class="status">ZAS Code: FR76ZAG01</div>
+</header>
+
+<div class="dashboard-container">
+
+    <aside class="controls-panel">
+        <h2>Analysis Parameters</h2>
+
+        <div class="control-group">
+            <label for="pollutant">Target Pollutant</label>
+            <select id="pollutant">
+                <option value="PM2.5">PM2.5</option>
+                <option value="NO2">NO2</option>
+                <option value="O3">O3</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="periodicity">Resampling Periodicity</label>
+            <select id="periodicity">
+                <option value="hourly">Hourly</option>
+                <option value="daily" selected>Daily</option>
+                <option value="weekly">Weekly</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="rollingWindow">Trend Rolling Window: <span id="windowVal">24</span></label>
+            <input type="range" id="rollingWindow" min="2" max="60" value="24">
+            <small>Smooths high-frequency variance.</small>
+        </div>
+
+        <div class="control-group">
+            <label for="stlSeasonal">STL Seasonal Window: <span id="stlVal">13</span></label>
+            <input type="range" id="stlSeasonal" min="3" max="51" step="2" value="13">
+            <small>Must be an odd integer.</small>
+        </div>
+
+        <div class="control-group">
+            <label for="nlags">Memory Lags (ACF): <span id="lagVal">48</span></label>
+            <input type="range" id="nlags" min="10" max="100" value="48">
+        </div>
+
+        <div class="control-group checkbox-group">
+            <input type="checkbox" id="robustFit" checked>
+            <label for="robustFit">Enable Robust STL Fitting</label>
+        </div>
+
+        <button id="runAnalysisBtn" class="primary-btn">Execute Pipeline</button>
+    </aside>
+
+    <main class="visualizations-panel">
+        <div class="chart-card">
+            <h3>Trend & Stationarity Analysis</h3>
+            <div class="chart-container">
+                <canvas id="trendChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="chart-card half-width">
+                <h3>STL Decomposition (Seasonal)</h3>
+                <div class="chart-container">
+                    <canvas id="stlChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-card half-width">
+                <h3>Memory Profile (Correlogram)</h3>
+                <div class="chart-container">
+                    <canvas id="acfChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

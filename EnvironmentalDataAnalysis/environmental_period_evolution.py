@@ -177,7 +177,7 @@ def animate_spatial_evolution(
 # EXECUTION BLOCK
 # =============================================================================
 if __name__ == '__main__':
-    target_directory = Path("era5_monthly_data")
+    target_directory = Path("Analysis - 02 round/era5_monthly_data")
 
     if target_directory.exists():
         # Objective 1: Save as a GIF

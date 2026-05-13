@@ -18,7 +18,7 @@ import pandas as pd
 
 # Import the previously defined functions from your modules
 from environmental_data_loading_AI_enhanced import era5_land_importing_by_date
-from environmental_data_conversion_AI_enhanced import environmental_data_conversion_era5_to_3d
+from environmental_data_conversion_AI_enhanced import environmental_data_conversion_era5_to_3d, process_grib_to_3d_dict
 
 # Configure module-level logger
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -187,12 +187,56 @@ def run_era5_etl_pipeline_3d(
     return output_dir_path
 
 
+def run_grib_to_hdf5_pipeline(
+        grib_file_path: str | Path,
+        target_year: int,
+        target_month: int,
+        output_directory: str | Path = "era5_monthly_data",
+        verbose: bool = False
+) -> Path:
+    """
+    End-to-end pipeline to convert a downloaded .grib file directly into our optimized 3D .h5 format.
+
+    Args:
+        grib_file_path (str | Path): Path to the source .grib file.
+        target_year (int): Year for the HDF5 naming convention.
+        target_month (int): Month for the HDF5 naming convention.
+        output_directory (str | Path): Directory to store the .h5 file.
+        verbose (bool): If True, enables debug-level logging.
+
+    Returns:
+        Path: The absolute path to the generated .h5 file.
+    """
+    logger.info(f"Initiating Direct GRIB-to-HDF5 Pipeline for {target_year}-{target_month:02d}...")
+
+    # Step 1: TRANSFORM (Read GRIB into standard 3D dictionary)
+    logger.info("Executing Transformation (Parsing GRIB)...")
+    data_dict = process_grib_to_3d_dict(grib_file_path, verbose=verbose)
+
+    if not data_dict:
+        logger.warning(f"Transformation yielded no data for {grib_file_path}. Skipping load phase.")
+        return None
+
+    # Step 2: LOAD (Write dictionary to HDF5 using your existing function)
+    logger.info("Executing Load (HDF5 Storage)...")
+    h5_file_path = store_era5_3d_to_hdf5(
+        target_year=target_year,
+        target_month=target_month,
+        data_dict=data_dict,
+        output_directory=output_directory,
+        verbose=verbose
+    )
+
+    logger.info("GRIB pipeline orchestration completed successfully.")
+    return h5_file_path
+
+
 if __name__ == '__main__':
     # Define execution parameters
 
     #TODO: What if we change the year?
-    year = 2021
-    start_m = 10
+    year = 2023
+    start_m = 7
     end_m = 12
     TARGET_OUTPUT_ROOT_DIR = "Analysis - 02 round"
     target_output_dir = f"{TARGET_OUTPUT_ROOT_DIR}/era5_monthly_data"

@@ -17,6 +17,7 @@ import h5py
 import netCDF4 as cd
 import numpy as np
 import pandas as pd
+import earthkit.data as ek
 
 # Configure module-level logger
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -210,10 +211,80 @@ def environmental_data_conversion_era5_to_3d(
     return structured_data_dict
 
 
+def process_grib_to_3d_dict(grib_file_path: Path | str, verbose: bool = False) -> dict:
+    """
+    Reads a .grib file and converts it into the standard 3D dictionary format
+    expected by the store_era5_3d_to_hdf5 function.
+
+    Args:
+        grib_file_path (Path | str): The path to the downloaded .grib file.
+        verbose (bool): If True, enables debug-level logging.
+
+    Returns:
+        dict: A dictionary containing 3D numpy arrays and coordinate vectors.
+    """
+    if verbose:
+        logger.setLevel(logging.DEBUG)
+
+    grib_path = Path(grib_file_path)
+
+    # 1. Validation: Ensure the file exists before attempting to open it
+    if not grib_path.exists():
+        logger.error(f"GRIB file not found at: {grib_path}")
+        return {}
+
+    processed_data_dict = {}
+
+    try:
+        logger.info(f"Opening GRIB file via earthkit-data: {grib_path.name}")
+
+        # 2. Data Loading: Use earthkit to read the source file
+        # This handles all the complex ecCodes binary decoding in the background.
+        fs = ek.from_source("file", str(grib_path))
+
+        # 3. Data Transformation: Convert the earthkit FieldSet into an xarray Datacube
+        # This groups the flat 2D layers into a clean 3D structure automatically.
+        ds = fs.to_xarray()
+
+        # 4. Coordinate Extraction
+        # Convert timestamps to ISO formatted byte strings ('S').
+        # HDF5 handles byte strings perfectly, preventing datetime serialization errors.
+        times = ds['time'].dt.strftime('%Y-%m-%d %H:%M:%S').values.astype('S')
+        lats = ds['latitude'].values
+        lons = ds['longitude'].values
+
+        # 5. Variable Packaging
+        # Iterate through every weather variable in the file (e.g., 't2m', 'tp')
+        for var_name, data_array in ds.data_vars.items():
+            logger.debug(f"Extracting 3D variable: {var_name}")
+
+            # Extract the pure multi-dimensional NumPy array (Time, Lat, Lon)
+            data_3d = data_array.values
+
+            # Package it into the exact dictionary structure your pipeline requires
+            processed_data_dict[var_name] = {
+                "data": data_3d,
+                "coordinates": {
+                    "time": times,
+                    "latitude": lats,
+                    "longitude": lons
+                }
+            }
+
+        logger.info(f"Successfully processed {len(processed_data_dict)} variables from {grib_path.name}.")
+
+    except ImportError:
+        logger.error("Missing dependencies. Please run: pip install earthkit-data xarray")
+    except Exception as e:
+        logger.error(f"Failed to process GRIB file {grib_path.name}. Error: {e}")
+
+    return processed_data_dict
+
+
 if __name__ == '__main__':
     # Implementation example
     # Define target folder using raw string for Windows paths or Path object
-    target_folder = Path(r'/stored_monthly_data/2004_05_01-31')
+    target_folder = Path(r'/stored_monthly_data/2021_12_01-31')
 
     # Execute conversion with verbose logging enabled
     result_data = environmental_data_conversion_era5_to_dfs(target_folder, verbose=True)

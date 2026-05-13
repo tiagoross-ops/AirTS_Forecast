@@ -303,7 +303,7 @@ if __name__ == '__main__':
     print("="*50 + "\n")
 
     # 1. Define target testing directory
-    test_dir = Path("era5_monthly_data")
+    test_dir = Path("Analysis - first round/era5_monthly_data")
 
     if not test_dir.exists():
         logger.error(f"Cannot run tests: The directory '{test_dir}' does not exist.")
@@ -347,7 +347,8 @@ if __name__ == '__main__':
             grand_mean = file_var_retrieval(
                 month_file=Path(r'/Environmental Data Analysis/era5_monthly_data\era5_3d_2004_03.h5'),
                 retrieval_func=grand_mean_retrieval
-            )['d2m'].iat[0,0]
+            )
+
             print(grand_mean)
             
             if extracted_vars:

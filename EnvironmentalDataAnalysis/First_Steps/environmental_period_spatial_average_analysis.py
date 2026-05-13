@@ -305,7 +305,7 @@ def export_period_3d_plots_to_pdf(
 
 
 if __name__ == '__main__':
-    target_directory = Path("../era5_monthly_data")
+    target_directory = Path("../Analysis - first round/era5_monthly_data")
 
     if not target_directory.exists():
         logger.error(f"Cannot run tests: The directory '{target_directory}' does not exist.")

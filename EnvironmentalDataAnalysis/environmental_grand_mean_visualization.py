@@ -297,7 +297,7 @@ def export_grand_mean_stats_to_excel(
 # =============================================================================
 
 if __name__ == '__main__':
-    target_dir = Path("era5_monthly_data")
+    target_dir = Path("Analysis - first round/era5_monthly_data")
 
     if target_dir.exists():
         logger.info(f"\nInitiating Grand Mean Period Analysis on directory: {target_dir.name}...")

@@ -394,8 +394,8 @@ def export_stats_to_excel(
 # 5. EXECUTION BLOCK
 # =============================================================================
 if __name__ == '__main__':
-    source_dir = Path("era5_monthly_data")
-    test_file = source_dir / "era5_3d_2004_06.h5"
+    source_dir = Path("Analysis - 02 round/era5_monthly_data")
+    test_file = source_dir / "era5_3d_2021_06.h5"
 
     if test_file.exists():
         logger.info(f"Starting analysis and visualization for: {test_file.name}\n")
