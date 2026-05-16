@@ -3,8 +3,9 @@ AirTS-Forecast Project
 Module: Data Merging (Environmental + Pollution)
 Description:
 Loads time-series data from two distinct Parquet sources (Pollutants and
-Environmental Variables), standardizes their temporal indices, and performs
-an inner merge to construct a finalized multivariate dataset for RNN training.
+Environmental Variables), standardizes their temporal indices, applies specified
+periodicity (hourly/daily), and performs an inner merge to construct a finalized
+multivariate dataset for RNN training.
 """
 
 import logging
@@ -18,18 +19,30 @@ import matplotlib.pyplot as plt
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-def load_and_standardize_parquet(file_path: Path, source_name: str) -> pd.DataFrame:
+def load_and_standardize_parquet(file_path: Path, source_name: str, periodicity: str = "daily") -> pd.DataFrame:
     """
-    Loads a Parquet file and guarantees a standardized DatetimeIndex.
+    Loads a Parquet file, guarantees a standardized DatetimeIndex, and resamples
+    the data to the specified periodicity.
     """
     try:
         df = pd.read_parquet(file_path)
-        # Standardize the index to a proper Datetime format
+
+        # Standardize the index to a proper Datetime format (checking common naming conventions)
         if "timestamp" in df.columns:
             df.set_index("timestamp", inplace=True)
+        elif "Timestamp" in df.columns:
+            df.set_index("Timestamp", inplace=True)
 
         df.index = pd.to_datetime(df.index)
         df.sort_index(inplace=True)
+
+        # Apply Periodicity Resampling
+        if periodicity.lower() == "daily":
+            df = df.resample('D').mean()
+        elif periodicity.lower() == "hourly":
+            df = df.resample('H').mean()
+        else:
+            logger.warning(f"Unrecognized periodicity '{periodicity}'. Leaving data at original frequency.")
 
         return df
 
@@ -37,20 +50,20 @@ def load_and_standardize_parquet(file_path: Path, source_name: str) -> pd.DataFr
         logger.error(f"Failed to load {source_name} Parquet from {file_path.name}: {e}")
         return pd.DataFrame()
 
-def load_environmental_data(env_path: Path) -> pd.DataFrame:
+def load_environmental_data(env_path: Path, periodicity: str = "daily") -> pd.DataFrame:
     """
     Intelligently loads environmental data. Handles both a single consolidated
     Parquet file or a directory containing multiple variable-specific Parquet files.
     """
     if env_path.is_file() and env_path.suffix == ".parquet":
-        return load_and_standardize_parquet(env_path, "Environmental")
+        return load_and_standardize_parquet(env_path, "Environmental", periodicity)
 
     elif env_path.is_dir():
         logger.info(f"Directory detected. Consolidating Parquet files from {env_path.name}...")
         env_dfs = []
 
         for p_file in env_path.glob("*.parquet"):
-            df = load_and_standardize_parquet(p_file, p_file.name)
+            df = load_and_standardize_parquet(p_file, p_file.name, periodicity)
             if not df.empty:
                 env_dfs.append(df)
 
@@ -75,14 +88,16 @@ def analyze_feature_correlations(
         targets: list,
         features: list,
         top_k: int = 3,
-        method: str = 'spearman'
+        save_directory: Path = None,
+        method: str = 'spearman',
+        verboose:bool=True
 ) -> dict:
     """
     Calculates the correlation matrix between pollutants and weather variables.
     Plots a heatmap and returns a dictionary mapping each target to its top_k most
     correlated environmental features.
     """
-    print(f"\n{'=' * 70}\nFEATURE SELECTION: {method.capitalize()} Correlation\n{'=' * 70}")
+    if verboose: print(f"\n{'=' * 70}\nFEATURE SELECTION: {method.capitalize()} Correlation\n{'=' * 70}")
 
     # Calculate the correlation matrix for all targets and features
     corr_matrix = df[targets + features].corr(method=method)
@@ -94,14 +109,24 @@ def analyze_feature_correlations(
     plt.title(f"Target vs Environmental Features ({method.capitalize()} Correlation)", fontweight="bold")
     plt.tight_layout()
 
-    plt.savefig("Pollution Data Analysis/outputs/plots/correlation_heatmap.png", dpi=150)
-    print(f"[✓] Correlation heatmap saved to 'outputs/plots/correlation_heatmap.png'")
+    # Ensure output directory exists for the plot
+    Path("PollutionDataAnalysis/outputs/plots").mkdir(parents=True, exist_ok=True)
+    if save_directory is not None:
+        save_directory = save_directory
+    else:
+        save_directory = Path("PollutionDataAnalysis/outputs/plots/correlation_heatmap.png")
+    plt.savefig(save_directory, dpi=150)
+    if verboose: print(f"[✓] Correlation heatmap saved to 'outputs/plots/correlation_heatmap.png'")
     plt.show()
+
     best_features_dict = {}
 
     for target in targets:
+        if target not in corr_matrix.columns:
+            continue
+
         # Isolate the correlations for this specific pollutant
-        target_corrs = corr_matrix[target].drop(labels=targets) # Drop other pollutants
+        target_corrs = corr_matrix[target].drop(labels=targets, errors='ignore') # Drop other pollutants
 
         # We care about magnitude (absolute value). A strong negative correlation
         # (e.g., wind clearing out pollution) is just as useful as a positive one!
@@ -111,10 +136,10 @@ def analyze_feature_correlations(
         top_features = abs_corrs.head(top_k).index.tolist()
         best_features_dict[target] = top_features
 
-        print(f"\n Top {top_k} Predictors for {target}:")
+        if verboose: print(f"\n Top {top_k} Predictors for {target}:")
         for feat in top_features:
             # Print the real correlation value (with its original +/- sign)
-            print(f"   -> {feat}: {target_corrs[feat]:.3f}")
+            if verboose: print(f"   -> {feat}: {target_corrs[feat]:.3f}")
 
     return best_features_dict
 
@@ -122,16 +147,16 @@ def analyze_feature_correlations(
 def merge_environmental_and_pollution(
         pollution_parquet_path: Union[str, Path],
         environmental_parquet_path: Union[str, Path],
-        output_parquet_path: Union[str, Path]
+        output_parquet_path: Union[str, Path],
+        periodicity: str = "daily"
 ) -> pd.DataFrame:
     """
     Main orchestrator: Loads pollution data as the base dataset, iterates through
     the environmental Parquet directory, iteratively merges each variable as a
-    new column, and saves the final multivariate dataset.
+    new column, and saves the final multivariate dataset based on the chosen periodicity.
     """
-    logger.info("Step 1: Loading Base Pollution Data...")
-    # Assuming load_and_standardize_parquet is defined elsewhere in your module
-    merged_df = load_and_standardize_parquet(Path(pollution_parquet_path), "Pollution")
+    logger.info(f"Step 1: Loading Base Pollution Data (Periodicity: {periodicity})...")
+    merged_df = load_and_standardize_parquet(Path(pollution_parquet_path), "Pollution", periodicity)
 
     if merged_df.empty:
         logger.error("Merge aborted: Pollution dataset is empty or failed to load.")
@@ -152,7 +177,7 @@ def merge_environmental_and_pollution(
     # Iteratively join each environmental variable file as a new column
     for env_file in env_files:
         logger.info(f"Appending environmental feature: {env_file.name}")
-        env_df = load_and_standardize_parquet(env_file, env_file.stem)
+        env_df = load_and_standardize_parquet(env_file, env_file.stem, periodicity)
 
         if env_df.empty:
             logger.warning(f"Skipping {env_file.name}: File is empty or failed to load.")
@@ -183,33 +208,39 @@ def merge_environmental_and_pollution(
 # ==========================================
 if __name__ == "__main__":
     # 1. Define your file paths
-    # Note: WEATHER_PARQUET_SOURCE can now be a specific .parquet file OR a directory of them
-    POLLUTION_FILE = "Pollution Data Analysis/outputs/consolidated_pollutants.parquet"
+    POLLUTION_FILE = "PollutionDataAnalysis/outputs/consolidated_pollutants.parquet"
     WEATHER_PARQUET_SOURCE = "EnvironmentalDataAnalysis/Exported_Parquet_Data"
-    FINAL_OUTPUT_FILE = "Pollution Data Analysis/outputs/rnn_multivariate_dataset.parquet"
+    FINAL_OUTPUT_FILE = "PollutionDataAnalysis/outputs/rnn_multivariate_dataset.parquet"
+
+    # Define desired periodicity ("daily" or "hourly")
+    DATA_PERIODICITY = "daily"
 
     # 2. Run the pipeline
     final_dataset = merge_environmental_and_pollution(
         pollution_parquet_path=POLLUTION_FILE,
         environmental_parquet_path=WEATHER_PARQUET_SOURCE,
         output_parquet_path=FINAL_OUTPUT_FILE,
+        periodicity=DATA_PERIODICITY
     )
 
     if not final_dataset.empty:
-        print("\nPreview of the new multivariate dataset ready for your RNN:")
+        print(f"\nPreview of the new {DATA_PERIODICITY} multivariate dataset ready for your RNN:")
         print(final_dataset)
 
-    targets = ["NO2", "PM10", "PM25"]
+        targets = ["PM10", "PM25", "NO2", "NOx", "O3"]
 
-    # Identify all columns that are NOT targets (these are our weather features)
-    all_weather_features = [col for col in final_dataset.columns if col not in targets]
+        # Safely identify targets that exist in the dataframe
+        valid_targets = [col for col in targets if col in final_dataset.columns]
 
-    # --- NEW: Run Feature Selection ---
-    # We ask for the top 3 weather features per pollutant
-    optimal_features_dict = analyze_feature_correlations(
-        df=final_dataset,
-        targets=targets,
-        features=all_weather_features,
-        top_k=3,
-        method='spearman'
-    )
+        # Identify all columns that are NOT targets (these are our weather features)
+        all_weather_features = [col for col in final_dataset.columns if col not in valid_targets]
+
+        # --- Run Feature Selection ---
+        if valid_targets and all_weather_features:
+            optimal_features_dict = analyze_feature_correlations(
+                df=final_dataset,
+                targets=valid_targets,
+                features=all_weather_features,
+                top_k=3,
+                method='spearman'
+            )

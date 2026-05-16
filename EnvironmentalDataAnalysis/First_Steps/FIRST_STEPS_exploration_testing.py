@@ -5,7 +5,7 @@ File: FIRST_STEPS_exploration_testing.py
 Author: Tiago TOLOCZKO ROSS
 
 Description:
-Mainly human-made code to set some ideas for loading step in environmental_data_compaction_to_h5.py
+Mainly human-made code to set some ideas for loading step in environmental_data_etl_loading_orchestration.py
 """
 
 from First_Steps.FIRST_STEPS_Data_Loading import *
