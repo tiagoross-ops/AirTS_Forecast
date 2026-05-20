@@ -1,12 +1,13 @@
 """URBAN POLLUTION FORECASTING — TUTORIAL FOR BEGINNERS
 Part 3 : Neural Networks for Time Series
-    RNN · LSTM · Training · Evaluation · Visualization
+    RNN · LSTM · Bi-LSTM · GRU · Training · Evaluation · Visualization
 """
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import warnings
+import optuna
 
 warnings.filterwarnings("ignore")
 import os
@@ -39,18 +40,26 @@ else:
     print("[!] Using CPU (slow, but works everywhere)")
 
 #--------------------------------------------------------------------
-# HYPERPARAMETERS
+# CONFIGURATION CLASS (Dynamic Hyperparameters)
 #--------------------------------------------------------------------
-LOOK_BACK = 30
-HORIZON = 7
-BATCH_SIZE = 128
-EPOCHS = 100
-LEARNING_RATE = 0.001
-PATIENCE = 50
-HIDDEN_DIM = 256
-NUM_LAYERS = 2
-TEST_FRACTION = 0.2 # 20% of data used for testing/predicting
+class Config:
+    """
+    Centralized configuration class.
+    Allows external scripts to import this module and modify hyperparameters
+    dynamically before running functions.
+    """
+    LOOK_BACK = 30
+    HORIZON = 7
+    BATCH_SIZE = 128
+    EPOCHS = 100
+    LEARNING_RATE = 0.001
+    PATIENCE = 50
+    HIDDEN_DIM = 256
+    NUM_LAYERS = 2
+    TEST_FRACTION = 0.2
 
+# Instantiate the global config object
+config = Config()
 
 #--------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -60,9 +69,12 @@ def mape(y_true, y_pred):
     mask = y_true != 0
     return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
-
-def make_sequences(data, look_back=LOOK_BACK, horizon=HORIZON):
+def make_sequences(data, look_back=None, horizon=None):
     """Create sliding window sequences from time series data."""
+    # Dynamically pull from config if not explicitly provided
+    look_back = look_back if look_back is not None else config.LOOK_BACK
+    horizon = horizon if horizon is not None else config.HORIZON
+
     data = np.asarray(data)
     X, y = [], []
     for i in range(len(data) - look_back - horizon + 1):
@@ -70,10 +82,8 @@ def make_sequences(data, look_back=LOOK_BACK, horizon=HORIZON):
         y.append(data[i + look_back:i + look_back + horizon])
     return np.array(X), np.array(y)
 
-
 class PollutionDataset(Dataset):
     """PyTorch Dataset wrapper for pollution time series."""
-
     def __init__(self, X, y):
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
@@ -84,9 +94,10 @@ class PollutionDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-
-def prepare_data(df, pollutant, scaler=None, test_fraction=TEST_FRACTION):
+def prepare_data(df, pollutant, scaler=None, test_fraction=None):
     """Full data preparation pipeline."""
+    test_fraction = test_fraction if test_fraction is not None else config.TEST_FRACTION
+
     data = df[pollutant].values.astype(np.float32)
 
     #- Step 1: Scale to [0, 1]
@@ -97,31 +108,34 @@ def prepare_data(df, pollutant, scaler=None, test_fraction=TEST_FRACTION):
         data_scaled = scaler.transform(data.reshape(-1, 1)).flatten()
 
     #- Step 2: Create sequences
-    X, y = make_sequences(data_scaled, look_back=LOOK_BACK, horizon=HORIZON)
+    X, y = make_sequences(data_scaled)
 
     #- Step 3: Split train/test chronologically
     split_idx = int(len(X) * (1 - test_fraction))
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
 
-    _, y_test_orig = make_sequences(data, look_back=LOOK_BACK, horizon=HORIZON)
+    _, y_test_orig = make_sequences(data)
     y_test_orig = y_test_orig[split_idx:]
 
     #- Step 4: Create PyTorch dataloaders
     train_dataset = PollutionDataset(X_train, y_train)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
     test_dataset = PollutionDataset(X_test, y_test)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
 
     return train_loader, test_loader, scaler, y_test_orig
-
 
 # =====================================================================
 # SECTION A & B : MODELS (RNN, LSTM, bi-LSTM, GRU)
 # =====================================================================
 class RNNModel(nn.Module):
-    def __init__(self, input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=HORIZON, num_layers=NUM_LAYERS, dropout=0.2):
+    def __init__(self, input_dim=1, hidden_dim=None, output_dim=None, num_layers=None, dropout=0.2):
         super(RNNModel, self).__init__()
+        hidden_dim = hidden_dim if hidden_dim is not None else config.HIDDEN_DIM
+        output_dim = output_dim if output_dim is not None else config.HORIZON
+        num_layers = num_layers if num_layers is not None else config.NUM_LAYERS
+
         self.rnn = nn.RNN(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers,
                           dropout=dropout if num_layers > 1 else 0, batch_first=True)
         self.fc = nn.Linear(hidden_dim, output_dim)
@@ -134,12 +148,12 @@ class RNNModel(nn.Module):
 
 
 class LSTMModel(nn.Module):
-    def __init__(self, input_dim=1,
-                 hidden_dim=HIDDEN_DIM,
-                 output_dim=HORIZON,
-                 num_layers=NUM_LAYERS,
-                 dropout=0.2):
+    def __init__(self, input_dim=1, hidden_dim=None, output_dim=None, num_layers=None, dropout=0.2):
         super(LSTMModel, self).__init__()
+        hidden_dim = hidden_dim if hidden_dim is not None else config.HIDDEN_DIM
+        output_dim = output_dim if output_dim is not None else config.HORIZON
+        num_layers = num_layers if num_layers is not None else config.NUM_LAYERS
+
         self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers,
                             dropout=dropout if num_layers > 1 else 0, batch_first=True)
         self.fc = nn.Linear(hidden_dim, output_dim)
@@ -152,38 +166,40 @@ class LSTMModel(nn.Module):
 
 
 class BiLSTMModel(nn.Module):
-    def __init__(self, input_dim=1,
-                 hidden_dim=HIDDEN_DIM,
-                 output_dim=HORIZON,
-                 num_layers=NUM_LAYERS,
-                 dropout=0.2):
+    def __init__(self, input_dim=1, hidden_dim=None, output_dim=None, num_layers=None, dropout=0.2):
         super(BiLSTMModel, self).__init__()
+        hidden_dim = hidden_dim if hidden_dim is not None else config.HIDDEN_DIM
+        output_dim = output_dim if output_dim is not None else config.HORIZON
+        num_layers = num_layers if num_layers is not None else config.NUM_LAYERS
+
         self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers,
                             dropout=dropout if num_layers > 1 else 0, batch_first=True,
                             bidirectional=True)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.fc = nn.Linear(hidden_dim * 2, output_dim)
 
     def forward(self, x):
         x = x.unsqueeze(-1)
         output, (hidden, cell) = self.lstm(x)
-        out = self.fc(hidden[-1])
+        hidden_concat = torch.cat((hidden[-2], hidden[-1]), dim=1)
+        out = self.fc(hidden_concat)
         return out
 
 
 class GRUModel(nn.Module):
-    def __init__(self, input_dim=1,
-                 hidden_dim=HIDDEN_DIM,
-                 output_dim=HORIZON,
-                 num_layers=NUM_LAYERS,
-                 dropout=0.2):
+    def __init__(self, input_dim=1, hidden_dim=None, output_dim=None, num_layers=None, dropout=0.2):
         super(GRUModel, self).__init__()
-        self.lstm = nn.GRU(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers,
-                            dropout=dropout if num_layers > 1 else 0, batch_first=True)
+        hidden_dim = hidden_dim if hidden_dim is not None else config.HIDDEN_DIM
+        output_dim = output_dim if output_dim is not None else config.HORIZON
+        num_layers = num_layers if num_layers is not None else config.NUM_LAYERS
+
+        self.gru = nn.GRU(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers,
+                          dropout=dropout if num_layers > 1 else 0, batch_first=True)
         self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
         x = x.unsqueeze(-1)
-        output, (hidden, cell) = self.lstm(x)
+        # GRU only returns (output, hidden) - no cell state!
+        output, hidden = self.gru(x)
         out = self.fc(hidden[-1])
         return out
 
@@ -191,8 +207,17 @@ class GRUModel(nn.Module):
 # =====================================================================
 # SECTION C : TRAINING LOOP
 # =====================================================================
-def train_model(model, train_loader, test_loader, epochs=EPOCHS,
-                learning_rate=LEARNING_RATE, patience=PATIENCE, model_name="Model"):
+def train_model(
+        model,
+        train_loader, test_loader,
+        epochs=None, learning_rate=None, patience=None,
+        model_name="Model",
+        trial: optuna.Trial = None,
+):
+    epochs = epochs if epochs is not None else config.EPOCHS
+    learning_rate = learning_rate if learning_rate is not None else config.LEARNING_RATE
+    patience = patience if patience is not None else config.PATIENCE
+
     model = model.to(device)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -229,21 +254,27 @@ def train_model(model, train_loader, test_loader, epochs=EPOCHS,
         val_loss /= len(test_loader)
         val_losses.append(val_loss)
 
+        if trial is not None:
+            trial.report(val_loss, epoch)
+            if trial.should_prune():
+                print(f" [!] Trial pruned by Optuna at epoch {epoch + 1} (Unpromising trajectory).")
+                raise optuna.exceptions.TrialPruned()
+
         if val_loss < best_val_loss:
             best_val_loss, patience_counter = val_loss, 0
             best_model_state = copy.deepcopy(model.state_dict())
             if (epoch + 1) % 10 == 0 or epoch < 5:
-                print(
-                    f" Epoch {epoch + 1:3d}/{epochs}: Train Loss={train_loss:.6f}, Val Loss={val_loss:.6f} [NEW BEST]")
+                print(f" Epoch {epoch + 1:3d}/{epochs}: Train Loss={train_loss:.6f}, Val Loss={val_loss:.6f} [NEW BEST]")
         else:
             patience_counter += 1
             if (epoch + 1) % 10 == 0:
-                print(
-                    f" Epoch {epoch + 1:3d}/{epochs}: Train Loss={train_loss:.6f}, Val Loss={val_loss:.6f} (patience {patience_counter}/{patience})")
+                print(f" Epoch {epoch + 1:3d}/{epochs}: Train Loss={train_loss:.6f}, Val Loss={val_loss:.6f} (patience {patience_counter}/{patience})")
 
         if patience_counter >= patience:
             print(f"\n Early stopping triggered at epoch {epoch + 1}.")
             break
+
+
 
     model.load_state_dict(best_model_state)
     print(f"[✓] Training complete. Best val_loss: {best_val_loss:.6f}")
@@ -284,53 +315,32 @@ def predict_and_plot_series(
         title: str = None,
         save_directory: str = None
 ):
-    """
-    Predicts the test fraction and plots it seamlessly over the historical data.
-    Returns the Matplotlib Figure object for downstream reporting.
-    """
     model.eval()
     predictions_scaled = []
 
     with torch.no_grad():
         for X_batch, _ in test_loader:
             X_batch = X_batch.to(device)
-            # Take only the 1st step of each 7-day prediction for a continuous smooth line
             y_pred = model(X_batch).cpu().numpy()
             predictions_scaled.append(y_pred[:, 0])
 
     predictions_scaled = np.concatenate(predictions_scaled).reshape(-1, 1)
-
-    # Inverse transform to original pollution units (e.g., µg/m³)
     predictions_real = scaler.inverse_transform(predictions_scaled).flatten()
 
-    # Calculate exactly where the predictions belong chronologically
-    total_sequences = len(df_daily) - LOOK_BACK - HORIZON + 1
-    split_idx = int(total_sequences * (1 - TEST_FRACTION))
-    start_date_idx = split_idx + LOOK_BACK
+    total_sequences = len(df_daily) - config.LOOK_BACK - config.HORIZON + 1
+    split_idx = int(total_sequences * (1 - config.TEST_FRACTION))
+    start_date_idx = split_idx + config.LOOK_BACK
 
-    # Extract the matching dates from the dataframe index
     pred_dates = df_daily.index[start_date_idx: start_date_idx + len(predictions_real)]
 
-    # --- PLOTTING ---
-    # 1. Assign the created figure to a variable named 'fig'
     fig = plt.figure(figsize=(14, 6))
 
-    # Plot 1: Historical Data (The whole dataset)
     plt.plot(df_daily.index, df_daily[pollutant], color="lightgray", label="Observed Data", alpha=0.8)
-
-    # Plot 2: Highlight the Ground Truth of the testing period in Black
     plt.plot(pred_dates, df_daily[pollutant].loc[pred_dates], color="black", label="True Future Data", linewidth=1.5)
-
-    # Plot 3: The Model's Prediction in Red
     plt.plot(pred_dates, predictions_real, color="red", label=f"{model_name} Forecast", linewidth=2.0)
+    plt.axvline(pred_dates[0], color="blue", linestyle="--", alpha=0.6, label="Train/Test Split")
 
-    # Add a vertical line distinguishing the 80% Train vs 20% Test barrier
-    plt.axvline(pred_dates[0], color="blue", linestyle="--", alpha=0.6, label="Train/Test Split (80/20)")
-
-    if title is not None:
-        title = title
-    else:
-        title = f"{pollutant} Concentration Forecast vs Reality ({model_name})"
+    title = title if title else f"{pollutant} Concentration Forecast vs Reality ({model_name})"
     plt.title(title, fontsize=14, fontweight="bold")
     plt.xlabel("Date", fontsize=12)
     plt.ylabel(f"{pollutant} Level", fontsize=12)
@@ -338,15 +348,14 @@ def predict_and_plot_series(
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.tight_layout()
 
-    # Save the figure dynamically using the 'fig' object
     if save_directory is not None:
-        save_path = save_directory + "/" + f"{title}.png"
+        save_path = os.path.join(save_directory, f"{title}.png")
     else:
         save_path = f"outputs/plots/{pollutant}_{model_name}_forecast.png"
+
     fig.savefig(save_path, dpi=150)
     print(f"[✓] Forecast plot saved successfully to: {save_path}")
 
-    # 2. Return the figure object
     return fig
 
 
@@ -356,7 +365,7 @@ def predict_and_plot_series(
 def main_execution() -> None:
     print("Loading data from Part 1...")
     try:
-        parquet_path = r"/PollutionDataAnalysis\outputs\consolidated_pollutants.parquet"
+        parquet_path = r"PollutionDataAnalysis/outputs/consolidated_pollutants.parquet"
         df = pd.read_parquet(parquet_path)
 
         if "Timestamp" in df.columns:
@@ -365,7 +374,6 @@ def main_execution() -> None:
             df = df.set_index("timestamp")
 
         df_daily = df.resample("D").mean().interpolate(method='linear')
-        df_daily = df_daily[:]
     except FileNotFoundError:
         print("[!] Dataset not found. Ensure the parquet file exists at the specified path.")
         return
@@ -381,66 +389,57 @@ def main_execution() -> None:
 
         print(f"\n{'=' * 70}\nPOLLUTANT: {pollutant}\n{'=' * 70}")
 
-        train_loader, test_loader, scaler, y_test_orig = prepare_data(df_daily, pollutant, test_fraction=TEST_FRACTION)
-        print(f" Train samples (80%): {len(train_loader.dataset)}")
-        print(f" Test samples (20%): {len(test_loader.dataset)}")
+        train_loader, test_loader, scaler, y_test_orig = prepare_data(df_daily, pollutant)
+        print(f" Train samples ({(1-config.TEST_FRACTION)*100:.0f}%): {len(train_loader.dataset)}")
+        print(f" Test samples ({config.TEST_FRACTION*100:.0f}%): {len(test_loader.dataset)}")
 
         #- RNN
-        rnn_model = RNNModel(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=HORIZON, num_layers=NUM_LAYERS)
+        rnn_model = RNNModel()
         rnn_model, _, _ = train_model(rnn_model, train_loader, test_loader, model_name=f"RNN ({pollutant})")
         rnn_metrics, _ = evaluate_model(rnn_model, test_loader, scaler, y_test_orig)
         rnn_results[pollutant] = rnn_metrics
-        print(
-            f" RNN Metrics: RMSE={rnn_metrics['RMSE']:.3f}, MAE={rnn_metrics['MAE']:.3f}, MAPE={rnn_metrics['MAPE']:.2f}%")
-        pred_rnn = predict_and_plot_series(rnn_model,
-                                           df_daily, pollutant,
-                                           test_loader, scaler,
-                                           model_name="RNN")
-        #plt.show()
+        print(f" RNN Metrics: RMSE={rnn_metrics['RMSE']:.3f}, MAE={rnn_metrics['MAE']:.3f}, MAPE={rnn_metrics['MAPE']:.2f}%")
+        pred_rnn = predict_and_plot_series(rnn_model, df_daily, pollutant, test_loader, scaler, model_name="RNN")
+        plt.close(pred_rnn)
 
         #- LSTM
-        lstm_model = LSTMModel(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=HORIZON, num_layers=NUM_LAYERS)
+        lstm_model = LSTMModel()
         lstm_model, _, _ = train_model(lstm_model, train_loader, test_loader, model_name=f"LSTM ({pollutant})")
         lstm_metrics, _ = evaluate_model(lstm_model, test_loader, scaler, y_test_orig)
         lstm_results[pollutant] = lstm_metrics
-        print(
-            f" LSTM Metrics: RMSE={lstm_metrics['RMSE']:.3f}, MAE={lstm_metrics['MAE']:.3f}, MAPE={lstm_metrics['MAPE']:.2f}%")
-        pred_lstm = predict_and_plot_series(lstm_model,
-                                           df_daily, pollutant,
-                                           test_loader, scaler,
-                                           model_name="LSTM")
-        #plt.show()
+        print(f" LSTM Metrics: RMSE={lstm_metrics['RMSE']:.3f}, MAE={lstm_metrics['MAE']:.3f}, MAPE={lstm_metrics['MAPE']:.2f}%")
+        pred_lstm = predict_and_plot_series(lstm_model, df_daily, pollutant, test_loader, scaler, model_name="LSTM")
+        plt.close(pred_lstm)
 
         #- Bi-LSTM
-        bi_lstm_model = BiLSTMModel(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=HORIZON, num_layers=NUM_LAYERS)
+        bi_lstm_model = BiLSTMModel()
         bi_lstm_model, _, _ = train_model(bi_lstm_model, train_loader, test_loader, model_name=f"Bi-LSTM ({pollutant})")
         bi_lstm_metrics, _ = evaluate_model(bi_lstm_model, test_loader, scaler, y_test_orig)
         bi_lstm_results[pollutant] = bi_lstm_metrics
-        print(
-            f"Bi-LSTM Metrics: RMSE={bi_lstm_metrics['RMSE']:.3f}, MAE={bi_lstm_metrics['MAE']:.3f},"
-            f"MAPE={bi_lstm_metrics['MAPE']:.2f}%")
-        pred_bi_lstm = predict_and_plot_series(bi_lstm_model,
-                                            df_daily, pollutant,
-                                            test_loader, scaler,
-                                            model_name="Bi-LSTM")
-        #plt.show()
+        print(f"Bi-LSTM Metrics: RMSE={bi_lstm_metrics['RMSE']:.3f}, MAE={bi_lstm_metrics['MAE']:.3f}, MAPE={bi_lstm_metrics['MAPE']:.2f}%")
+        pred_bi_lstm = predict_and_plot_series(bi_lstm_model, df_daily, pollutant, test_loader, scaler, model_name="Bi-LSTM")
+        plt.close(pred_bi_lstm)
 
         #- GRU
-        gru_model = LSTMModel(input_dim=1, hidden_dim=HIDDEN_DIM, output_dim=HORIZON, num_layers=NUM_LAYERS)
+        gru_model = GRUModel()
         gru_model, _, _ = train_model(gru_model, train_loader, test_loader, model_name=f"GRU ({pollutant})")
         gru_metrics, _ = evaluate_model(gru_model, test_loader, scaler, y_test_orig)
         gru_results[pollutant] = gru_metrics
-        print(
-            f" GRU Metrics: RMSE={gru_metrics['RMSE']:.3f}, MAE={gru_metrics['MAE']:.3f}, MAPE={gru_metrics['MAPE']:.2f}%")
-        pred_gru = predict_and_plot_series(gru_model,
-                                               df_daily, pollutant,
-                                               test_loader, scaler,
-                                               model_name="GRU")
-        #plt.show()
+        print(f" GRU Metrics: RMSE={gru_metrics['RMSE']:.3f}, MAE={gru_metrics['MAE']:.3f}, MAPE={gru_metrics['MAPE']:.2f}%")
+        pred_gru = predict_and_plot_series(gru_model, df_daily, pollutant, test_loader, scaler, model_name="GRU")
+        plt.close(pred_gru)
 
     print("\n" + "=" * 70 + "\nSaving results...")
+
+    # Updated dump to include all 4 models
     with open("outputs/nn_results.pkl", "wb") as f:
-        pickle.dump({"rnn_results": rnn_results, "lstm_results": lstm_results}, f)
+        pickle.dump({
+            "rnn_results": rnn_results,
+            "lstm_results": lstm_results,
+            "bilstm_results": bi_lstm_results,
+            "gru_results": gru_results
+        }, f)
+
     print("[✓] Neural network results saved to nn_results.pkl")
     print("\n" + "=" * 70 + "\nPart 3 Complete!\n" + "=" * 70)
 

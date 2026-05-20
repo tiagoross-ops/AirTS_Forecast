@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
@@ -100,13 +101,16 @@ BENCHMARK_FALLBACK = {
 # =====================================================================
 # HELPER FUNCTIONS
 # =====================================================================
-def load_results():
+def load_results(
+        classical_models_filepath: str | Path = "outputs/classical_model_results.json",
+        deep_learning_models_filepath: str | Path = "outputs/multivariate_nn_results.pkl"
+):
     """Loads results from Parts 2 and 3, merging them with fallbacks."""
 
     # 1. Load Classical Models
     classical_results = {}
     try:
-        with open("outputs/classical_model_results.json", "r") as f:
+        with open(classical_models_filepath, "r") as f:
             classical_results = json.load(f)
         print("[✓] Loaded classical model results from Part 2")
     except FileNotFoundError:
@@ -115,7 +119,7 @@ def load_results():
     # 2. Load Neural Networks
     neural_results = {}
     try:
-        with open("outputs/multivariate_nn_results.pkl", "rb") as f:
+        with open(deep_learning_models_filepath, "rb") as f:
             pkl_data = pickle.load(f)
             rnn_results_raw = pkl_data.get("rnn_results", {})
             gru_results_raw = pkl_data.get("gru_results", {})
