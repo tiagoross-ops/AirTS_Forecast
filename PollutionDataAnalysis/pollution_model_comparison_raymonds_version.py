@@ -159,7 +159,7 @@ def load_results(
         status = []
         for model in MODELS:
             # Check Classical Models
-            if model in classical_results.get(pollutant, {}):
+            if model in classical_results[pollutant]:
                 benchmark[pollutant][model] = classical_results[pollutant][model]
                 status.append(f"[✓] {model}")
             # Check Neural Models
@@ -296,7 +296,9 @@ def print_improvement_table(benchmark):
 # MAIN EXECUTION
 # =====================================================================
 def main():
-    benchmark = load_results()
+    classical_filepath = r"C:\Users\Tiago\IdeaProjects\AirTS_Forecast\PollutionDataAnalysis\outputs\classical_model_results.json"
+    benchmark = load_results(classical_models_filepath=classical_filepath)
+
     plot_mape_bar_chart(benchmark)
     plot_radar_charts(benchmark)
     print_improvement_table(benchmark)

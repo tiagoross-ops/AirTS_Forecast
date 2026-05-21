@@ -26,7 +26,7 @@ import optuna.visualization.matplotlib as vis_mpl
 
 # Import our core modules
 import PollutionDataAnalysis.multivariate_LSTM_environmental_pollution as mv
-import PollutionDataAnalysis.pollution_RNN_raymonds_version as sv
+import PollutionDataAnalysis.pollution_DL_models_single_variable as sv
 
 # =====================================================================
 # CONFIGURATION & STORAGE

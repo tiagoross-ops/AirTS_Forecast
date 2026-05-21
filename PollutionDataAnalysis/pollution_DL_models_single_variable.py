@@ -14,10 +14,11 @@ import os
 import pickle
 import copy  # For safe model state saving
 from typing import Any
-
+import random
 # PyTorch libraries
 import torch
 import torch.nn as nn
+import torch.nn.utils as nn_utils
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -204,6 +205,14 @@ class GRUModel(nn.Module):
         return out
 
 
+    def forward(self, x):
+        x = x.unsqueeze(-1)
+        # GAD specifics
+        output, hidden = self.gru(x)
+        out = self.fc(hidden[-1])
+        return out
+
+
 # =====================================================================
 # SECTION C : TRAINING LOOP
 # =====================================================================
@@ -282,7 +291,117 @@ def train_model(
 
 
 # =====================================================================
-# SECTION D : EVALUATION & VISUALIZATION
+# SECTION D : GENETIC ALGORITHM
+# =====================================================================
+def evaluate_fitness(model: nn.Module, data_loader: DataLoader, criterion: nn.Module) -> float:
+    """Helper function to evaluate a network's fitness (Lower Loss = Higher Fitness)"""
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for X_batch, y_batch in data_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            preds = model(X_batch)
+            total_loss += criterion(preds, y_batch).item()
+
+    avg_loss = total_loss / len(data_loader)
+    # Fitness is the inverse of loss. We add a tiny epsilon to prevent division by zero.
+    return 1.0 / (avg_loss + 1e-8), avg_loss
+
+def train_model_ga(
+        model: nn.Module,
+        train_loader: DataLoader,
+        test_loader: DataLoader,
+        model_name: str = "GA_LSTM",
+        pop_size: int = 20,
+        generations: int = 50,
+        mutation_rate: float = 0.05,
+        mutation_scale: float = 0.1
+):
+    """
+    Trains a PyTorch model using a Genetic Algorithm (Neuroevolution) instead of Backpropagation.
+    """
+    print(f"\n🧬 Evolving {model_name} using Genetic Algorithm...")
+    model = model.to(device)
+    criterion = nn.MSELoss()
+
+    # 1. Flatten the base model's weights into a single 1D vector
+    base_vector = nn_utils.parameters_to_vector(model.parameters()).detach()
+    num_params = len(base_vector)
+    print(f"Total DNA sequence length (parameters): {num_params:,}")
+
+    # 2. Initialize Population (Randomly mutate the base vector)
+    population = []
+    for _ in range(pop_size):
+        # Create a mutated clone
+        individual = base_vector + (torch.randn(num_params, device=device) * mutation_scale)
+        population.append(individual)
+
+    best_global_vector = None
+    best_global_loss = np.inf
+    train_losses = []
+
+    for gen in range(generations):
+        fitness_scores = []
+        losses = []
+
+        # --- EVALUATION PHASE ---
+        for individual in population:
+            # Load this individual's "DNA" into the PyTorch model
+            nn_utils.vector_to_parameters(individual, model.parameters())
+            fitness, loss = evaluate_fitness(model, train_loader, criterion)
+            fitness_scores.append(fitness)
+            losses.append(loss)
+
+        # Track the best performer
+        best_idx = np.argmax(fitness_scores)
+        if losses[best_idx] < best_global_loss:
+            best_global_loss = losses[best_idx]
+            best_global_vector = population[best_idx].clone()
+
+        train_losses.append(best_global_loss)
+
+        if (gen + 1) % 5 == 0 or gen == 0:
+            print(f" Generation {gen + 1:3d}/{generations} | Best Loss: {best_global_loss:.6f}")
+
+        # --- SELECTION PHASE (Tournament Selection) ---
+        new_population = []
+        # Elitism: Always keep the absolute best individual untouched
+        new_population.append(best_global_vector.clone())
+
+        while len(new_population) < pop_size:
+            # Pick 3 random individuals, let them fight, the fittest becomes a parent
+            tournament = random.sample(range(pop_size), 3)
+            parent1_idx = max(tournament, key=lambda idx: fitness_scores[idx])
+
+            tournament = random.sample(range(pop_size), 3)
+            parent2_idx = max(tournament, key=lambda idx: fitness_scores[idx])
+
+            parent1 = population[parent1_idx]
+            parent2 = population[parent2_idx]
+
+            # --- CROSSOVER PHASE (Uniform Crossover) ---
+            # 50/50 chance to take a gene (weight) from parent 1 or parent 2
+            mask = torch.rand(num_params, device=device) > 0.5
+            child = torch.where(mask, parent1, parent2)
+
+            # --- MUTATION PHASE ---
+            # Add random noise to a small percentage of weights
+            mutation_mask = torch.rand(num_params, device=device) < mutation_rate
+            noise = torch.randn(num_params, device=device) * mutation_scale
+            child = child + (mutation_mask * noise)
+
+            new_population.append(child)
+
+        population = new_population
+
+    # Load the absolute best DNA back into the model before returning
+    nn_utils.vector_to_parameters(best_global_vector, model.parameters())
+    print(f"[✓] Evolution complete. Best training loss: {best_global_loss:.6f}")
+
+    return model, train_losses, []
+
+# =====================================================================
+# SECTION E : EVALUATION & VISUALIZATION
 # =====================================================================
 def evaluate_model(model, test_loader, scaler, y_test_orig):
     model.eval()
@@ -365,7 +484,7 @@ def predict_and_plot_series(
 def main_execution() -> None:
     print("Loading data from Part 1...")
     try:
-        parquet_path = r"PollutionDataAnalysis/outputs/consolidated_pollutants.parquet"
+        parquet_path = r"C:\Users\Tiago\IdeaProjects\AirTS_Forecast\PollutionDataAnalysis\outputs\consolidated_pollutants.parquet"
         df = pd.read_parquet(parquet_path)
 
         if "Timestamp" in df.columns:
@@ -428,6 +547,23 @@ def main_execution() -> None:
         print(f" GRU Metrics: RMSE={gru_metrics['RMSE']:.3f}, MAE={gru_metrics['MAE']:.3f}, MAPE={gru_metrics['MAPE']:.2f}%")
         pred_gru = predict_and_plot_series(gru_model, df_daily, pollutant, test_loader, scaler, model_name="GRU")
         plt.close(pred_gru)
+
+        # GA on LSTM
+        #- Genetic Algorithm LSTM
+        ga_model = LSTMModel()
+
+        # Notice we use train_model_ga instead of train_model!
+        ga_model, _, _ = train_model_ga(
+            ga_model, train_loader, test_loader,
+            model_name=f"GA-LSTM ({pollutant})",
+            pop_size=30,
+            generations=50
+        )
+
+        ga_metrics, _ = evaluate_model(ga_model, test_loader, scaler, y_test_orig)
+        print(f" GA Metrics: RMSE={ga_metrics['RMSE']:.3f}, MAE={ga_metrics['MAE']:.3f}, MAPE={ga_metrics['MAPE']:.2f}%")
+        pred_ga = predict_and_plot_series(ga_model, df_daily, pollutant, test_loader, scaler, model_name="GA-LSTM")
+        plt.close(pred_ga)
 
     print("\n" + "=" * 70 + "\nSaving results...")
 

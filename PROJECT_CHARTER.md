@@ -37,13 +37,14 @@ The project develops and compares statistical and deep learning models for short
    - Metrics: PICP (Prediction Interval Coverage Probability), PINAW (Prediction Interval Normalized Average Width), CRPS (Continuous Ranked Probability Score)
 6. **Experimental Protocol**
    - Train/validation/test split (time-aware)
+   - Hyperparameter research by Bayesian Research for LSTM
    - Rolling-origin evaluation
    - Extreme pollution episode analysis
    - Sensitivity to input window size
    - 
 ## Out of Scope
 
-This project excludes every industrial application and marketing
+This project excludes every industrial application, dev activites
 
 ### Key Performance Indicators [WHAT]:
 
@@ -51,65 +52,69 @@ This project excludes every industrial application and marketing
 
 ### **Budget [HOW MUCH]:**
 
-* Maybe price of the servomotors and ESP32 (35 E$)
+* No budget was assigned
 
 ### **Deadline [WHEN]:**
 
-* From April 16th to May 31st
+* From March 1st to June 17th
 
 ### **Means [HOW]:**
 
-* Smartphone's orientation sensors
-* Application language - PWA (JavaScript)
-* Microcontroller - Arduino or ESP32
-* Microcontroller Language - Arduino IDE or ESP32 specific
-* Cabling and LEDs
-* Servomotors or DC motor + wheels + axle
-* 3D printed structure
+* Python for coding and data analysis
+* Jupyter notebooks for data visualization and sharing
+* GEOD'AIR and ERA5-Land databases for pollution data
+* 
 
 ## Clients and stakeholders
 
-* **The lecturer:** main stakeholder, project evaluation
-* **The University:** indirect stakeholder, course validation
-* **Electronics lab supervisor:** Acquire ESP32, cables and components
-* **ALM lab supervisor:** FDM printing
+* **The tutor (M. HOUÉ NGOUNA):** main stakeholder, project and deliverable evaluation, objective definition, project execution follow-up
+* **The students (M. REINOSO U.; M. T. ROSS):** Time management, task coordination, deliverable preparation and handling, objective accomplition, project execution
+* **Pollution and environmental data databases (GEOD'AIR; COPERNICUS' Era5-Land):** Data protection measures
+* **Future users:** Reliability of the models, clear usage instructions
+* **Toulouse's Mayor's office:** Reliability of the models for decision-making
+* **The Environment:** Global warming concerns
 
 ## Deliverables
 
-1. Literature Review Report
+### 1. Literature Review Report
 - Statistical vs deep learning forecasting
 - Probabilistic methods
 
-2. Data Analysis Notebook
+### 2. Data Analysis Notebook
 - EDA
 - Stationarity tests
 - ACF/PACF
 
-3. Modeling Notebook(s)
+### 3. Modeling Notebook(s)
 - ARIMA implementation
 - ETS implementation
 - LSTM implementation
 - Uncertainty estimation
 
-4. Comparative Evaluation Report
+### 4. Comparative Evaluation Report
 - Performance metrics
 - Interval calibration
 - Robustness analysis
 
-5. Final Report (30–40 pages)
+### 5. Final Report (30–40 pages)
 - Methodology
 - Results
 - Discussion
 - Environmental interpretation
 
-6. Oral Defense (20 minutes)
+### 6. Oral Defense (20 minutes)
 
 ## Millestones and calender
 
-Smartphone PWM or application -> BT-MC Integration -> Actuators and MC system -> Mechanical FDM structure
+Pollution data exploration => Training on data science models => Basic statistical models => Environmental data exploration
+=> Deel learning models => Model comparison => final presentation 
+ 
 
 
 ## Risk Management
 
-The student has not much experience in PWA code and micropython.
-Complexity may be underestimated and may not be accomplished due to low deadline
+The students do not have much previous experience with data analysis
+
+The students have to manage well their time so they can conduct the project while studying for semester classes
+
+The databases may be slow
