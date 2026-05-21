@@ -349,8 +349,6 @@ def evaluate_and_plot(
     print(f"[✓] Forecast plot saved successfully to: {save_path}")
     fig.savefig(save_path, dpi=150)
 
-    # Crucial to prevent RAM crashes in ML loops
-    plt.close(fig)
 
     return metrics
 
