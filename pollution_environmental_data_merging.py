@@ -176,7 +176,7 @@ def merge_environmental_and_pollution(
 
     # Iteratively join each environmental variable file as a new column
     for env_file in env_files:
-        logger.info(f"Appending environmental feature: {env_file.name}")
+        if __name__ == '__main__': logger.info(f"Appending environmental feature: {env_file.name}")
         env_df = load_and_standardize_parquet(env_file, env_file.stem, periodicity)
 
         if env_df.empty:

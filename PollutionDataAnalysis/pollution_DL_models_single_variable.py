@@ -35,6 +35,9 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 # Create outputs folder
+OUTPUT_DIR = Path("outputs")
+SV_DIR = OUTPUT_DIR / "SV DL pred"
+
 os.makedirs("outputs/plots", exist_ok=True)
 
 #--------------------------------------------------------------------
@@ -49,6 +52,7 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
     print("[!] Using CPU")
+
 
 #--------------------------------------------------------------------
 # CONFIGURATION CLASS
@@ -69,7 +73,9 @@ class Config:
     NUM_LAYERS: int = 2
     TEST_FRACTION: float = 0.2
 
+
 config = Config()
+
 
 #--------------------------------------------------------------------
 # HELPER FUNCTIONS & DATA PREP
@@ -87,6 +93,7 @@ def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """
     mask = y_true != 0
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
+
 
 def make_sequences(data: np.ndarray, look_back: int = None, horizon: int = None) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -106,21 +113,27 @@ def make_sequences(data: np.ndarray, look_back: int = None, horizon: int = None)
     data = np.asarray(data)
     X, y = [], []
     for i in range(len(data) - look_back - horizon + 1):
-        X.append(data[i : i + look_back])
-        y.append(data[i + look_back : i + look_back + horizon])
+        X.append(data[i: i + look_back])
+        y.append(data[i + look_back: i + look_back + horizon])
     return np.array(X), np.array(y)
+
 
 class PollutionDataset(Dataset):
     """PyTorch Dataset wrapper optimized for converting numpy arrays to float tensors."""
+
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
+
     def __len__(self) -> int:
         return len(self.X)
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.X[idx], self.y[idx]
 
-def prepare_data(df: pd.DataFrame, pollutant: str, scaler: MinMaxScaler = None, test_fraction: float = None) -> Tuple[DataLoader, DataLoader, MinMaxScaler, np.ndarray]:
+
+def prepare_data(df: pd.DataFrame, pollutant: str, scaler: MinMaxScaler = None, test_fraction: float = None) -> Tuple[
+    DataLoader, DataLoader, MinMaxScaler, np.ndarray]:
     """
     End-to-end data preparation pipeline for Univariate forecasting.
     Scales the data, splits chronologically, and converts into PyTorch DataLoaders.
@@ -159,54 +172,72 @@ def prepare_data(df: pd.DataFrame, pollutant: str, scaler: MinMaxScaler = None, 
 
     return train_loader, test_loader, scaler, y_test_orig
 
+
 # =====================================================================
 # MODELS (RNN, LSTM, Bi-LSTM, GRU)
 # =====================================================================
 class RNNModel(nn.Module):
     """Standard Recurrent Neural Network Architecture."""
+
     def __init__(self, input_dim: int = 1):
         super(RNNModel, self).__init__()
-        self.rnn = nn.RNN(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
+        self.rnn = nn.RNN(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                          batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         output, hidden = self.rnn(x.unsqueeze(-1))
         return self.fc(hidden[-1])
 
+
 class LSTMModel(nn.Module):
     """Long Short-Term Memory Architecture."""
+
     def __init__(self, input_dim: int = 1):
         super(LSTMModel, self).__init__()
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                            batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         output, (hidden, cell) = self.lstm(x.unsqueeze(-1))
         return self.fc(hidden[-1])
 
+
 class BiLSTMModel(nn.Module):
     """Bidirectional Long Short-Term Memory Architecture."""
+
     def __init__(self, input_dim: int = 1):
         super(BiLSTMModel, self).__init__()
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True, bidirectional=True)
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                            batch_first=True, bidirectional=True)
         self.fc = nn.Linear(config.HIDDEN_DIM * 2, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         output, (hidden, cell) = self.lstm(x.unsqueeze(-1))
         # Concatenate the final forward state and final backward state
         return self.fc(torch.cat((hidden[-2], hidden[-1]), dim=1))
 
+
 class GRUModel(nn.Module):
     """Gated Recurrent Unit Architecture."""
+
     def __init__(self, input_dim: int = 1):
         super(GRUModel, self).__init__()
-        self.gru = nn.GRU(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
+        self.gru = nn.GRU(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                          batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         output, hidden = self.gru(x.unsqueeze(-1))
         return self.fc(hidden[-1])
 
+
 # =====================================================================
 # CORE TRAINING LOOP
 # =====================================================================
-def train_model(model: nn.Module, train_loader: DataLoader, test_loader: DataLoader, model_name: str = "Model", trial: optuna.Trial = None) -> Tuple[nn.Module, list, list]:
+def train_model(model: nn.Module, train_loader: DataLoader, test_loader: DataLoader, model_name: str = "Model",
+                trial: optuna.Trial = None) -> Tuple[nn.Module, list, list]:
     """
     Standard Backpropagation/Gradient Descent training loop with early stopping.
 
@@ -272,10 +303,12 @@ def train_model(model: nn.Module, train_loader: DataLoader, test_loader: DataLoa
     model.load_state_dict(best_model_state)
     return model, train_losses, val_losses
 
+
 # =====================================================================
 # EVALUATION & VISUALIZATION
 # =====================================================================
-def evaluate_model(model: nn.Module, test_loader: DataLoader, scaler: MinMaxScaler, y_test_orig: np.ndarray) -> Tuple[Dict[str, float], np.ndarray]:
+def evaluate_model(model: nn.Module, test_loader: DataLoader, scaler: MinMaxScaler, y_test_orig: np.ndarray) -> Tuple[
+    Dict[str, float], np.ndarray]:
     """
     Evaluates the model on the test set, inverse-transforms the predictions,
     and calculates standard forecasting metrics.
@@ -295,6 +328,7 @@ def evaluate_model(model: nn.Module, test_loader: DataLoader, scaler: MinMaxScal
         "MAPE": mape(y_true_orig, y_pred_orig)
     }
     return metrics, y_pred_orig
+
 
 def predict_and_plot_series(
         model: nn.Module,
@@ -330,12 +364,13 @@ def predict_and_plot_series(
     plt.plot(pred_dates, predictions_real, color="red", label=f"{model_name} Forecast", linewidth=2.0)
     plt.axvline(pred_dates[0], color="blue", linestyle="--", alpha=0.6, label="Test Split")
 
-    plt.title(title, fontweight="bold")
+    plt.title(title.replace('_', ' '), fontweight="bold")
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend()
     plt.tight_layout()
     fig.savefig(os.path.join(save_directory, f"{title}.png"), dpi=150)
     return fig
+
 
 # =====================================================================
 # THE MASTER ORCHESTRATOR
@@ -417,11 +452,13 @@ def model_looping(
             # 4. Evaluation & Visualization
             metrics, _ = evaluate_model(model, test_loader, scaler, y_test_orig)
             results_dict[pollutant] = metrics
-            print(f" [✓] {model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f}, MAPE={metrics['MAPE']:.2f}%\n")
+            print(
+                f" [✓] {model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f}, MAPE={metrics['MAPE']:.2f}%\n")
 
             fig = predict_and_plot_series(
                 model, df_daily, pollutant, test_loader, scaler,
-                title=f"{model_name} Prediction - {pollutant}", save_directory="outputs/plots", model_name=model_name
+                title=f"{model_name} Prediction - {pollutant}",
+                save_directory=str(SV_DIR/pollutant), model_name=model_name
             )
 
             # Ensures that figures render safely inside Jupyter Notebooks if returned, but close to save RAM in standard console runs
@@ -435,6 +472,7 @@ def model_looping(
 
     return master_results
 
+
 # =====================================================================
 # MAIN EXECUTION
 # =====================================================================
@@ -442,8 +480,10 @@ if __name__ == "__main__":
     print("Loading data from Part 1...")
     try:
         df = pd.read_parquet(Path("outputs/consolidated_pollutants.parquet"))
-        if "Timestamp" in df.columns: df = df.set_index("Timestamp")
-        elif "timestamp" in df.columns: df = df.set_index("timestamp")
+        if "Timestamp" in df.columns:
+            df = df.set_index("Timestamp")
+        elif "timestamp" in df.columns:
+            df = df.set_index("timestamp")
         df_daily = df.resample("D").mean().interpolate(method='linear')
     except FileNotFoundError:
         print("[!] Dataset not found.")

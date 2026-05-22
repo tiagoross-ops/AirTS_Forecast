@@ -35,7 +35,10 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 # Create outputs folder
-os.makedirs("outputs/plots", exist_ok=True)
+OUTPUT_DIR = Path("outputs")
+MV_DIR = OUTPUT_DIR / "MV DL pred"
+
+os.makedirs(MV_DIR, exist_ok=True)
 
 #--------------------------------------------------------------------
 # DEVICE CONFIGURATION
@@ -50,9 +53,11 @@ else:
     device = torch.device("cpu")
     print("[!] Using CPU")
 
+
 #--------------------------------------------------------------------
 # CONFIGURATION CLASS
 #--------------------------------------------------------------------
+
 class Config:
     """
     Global configuration state for the Multivariate models.
@@ -69,7 +74,9 @@ class Config:
     NUM_LAYERS: int = 2
     TEST_FRACTION: float = 0.2
 
+
 config = Config()
+
 
 #--------------------------------------------------------------------
 # HELPER FUNCTIONS & DATA PREP
@@ -89,7 +96,8 @@ def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
 
-def make_sequences(features: np.ndarray, target: np.ndarray, look_back: int = None, horizon: int = None) -> Tuple[np.ndarray, np.ndarray]:
+def make_sequences(features: np.ndarray, target: np.ndarray, look_back: int = None, horizon: int = None) -> Tuple[
+    np.ndarray, np.ndarray]:
     """
     Slices a continuous multivariate time series into overlapping X (input) and y (target) sequences.
 
@@ -107,18 +115,28 @@ def make_sequences(features: np.ndarray, target: np.ndarray, look_back: int = No
 
     X, y = [], []
     for i in range(len(features) - look_back - horizon + 1):
-        X.append(features[i : i + look_back, :])
-        y.append(target[i + look_back : i + look_back + horizon])
+        X.append(features[i: i + look_back, :])
+        y.append(target[i + look_back: i + look_back + horizon])
     return np.array(X), np.array(y)
 
 
 class MultivariatePollutionDataset(Dataset):
     """PyTorch Dataset wrapper optimized for multivariate float tensors."""
+
     def __init__(self, X: np.ndarray, y: np.ndarray):
+        """
+        Initializes the dataset with input features and targets.
+
+        Args:
+            X (np.ndarray): The input sequences.
+            y (np.ndarray): The target sequences.
+        """
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
+
     def __len__(self) -> int:
         return len(self.X)
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.X[idx], self.y[idx]
 
@@ -141,6 +159,9 @@ def prepare_multivariate_data(
 
     Returns:
         Tuple: (train_loader, test_loader, target_scaler, raw_y_test_array, num_features)
+
+    Raises:
+        ValueError: If the dataset is too small to construct the required look_back and horizon.
     """
     test_fraction = test_fraction if test_fraction is not None else config.TEST_FRACTION
     split_idx = int(len(df) * (1 - test_fraction))
@@ -174,59 +195,84 @@ def prepare_multivariate_data(
 
     use_pin_memory = torch.cuda.is_available()
 
-    train_loader = DataLoader(MultivariatePollutionDataset(X_train, y_train), batch_size=config.BATCH_SIZE, shuffle=True, pin_memory=use_pin_memory)
-    test_loader = DataLoader(MultivariatePollutionDataset(X_test, y_test), batch_size=config.BATCH_SIZE, shuffle=False, pin_memory=use_pin_memory)
+    train_loader = DataLoader(MultivariatePollutionDataset(X_train, y_train), batch_size=config.BATCH_SIZE,
+                              shuffle=True, pin_memory=use_pin_memory)
+    test_loader = DataLoader(MultivariatePollutionDataset(X_test, y_test), batch_size=config.BATCH_SIZE, shuffle=False,
+                             pin_memory=use_pin_memory)
 
     return train_loader, test_loader, target_scaler, y_test_orig, len(feature_cols)
+
 
 # =====================================================================
 # MODELS (RNN, LSTM, Bi-LSTM, GRU)
 # =====================================================================
 class RNNModel(nn.Module):
     """Standard Recurrent Neural Network Architecture."""
+
     def __init__(self, input_dim: int):
         super(RNNModel, self).__init__()
-        self.rnn = nn.RNN(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
+        self.rnn = nn.RNN(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                          batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, hidden = self.rnn(x)
         return self.fc(hidden[-1])
 
+
 class LSTMModel(nn.Module):
     """Long Short-Term Memory Architecture."""
+
     def __init__(self, input_dim: int):
         super(LSTMModel, self).__init__()
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                            batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, (hidden, cell) = self.lstm(x)
         return self.fc(hidden[-1])
 
+
 class BiLSTMModel(nn.Module):
     """Bidirectional Long Short-Term Memory Architecture."""
+
     def __init__(self, input_dim: int):
         super(BiLSTMModel, self).__init__()
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True, bidirectional=True)
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                            batch_first=True, bidirectional=True)
         self.fc = nn.Linear(config.HIDDEN_DIM * 2, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, (hidden, cell) = self.lstm(x)
         # Concatenate the final forward state and final backward state
         return self.fc(torch.cat((hidden[-2], hidden[-1]), dim=1))
 
+
 class GRUModel(nn.Module):
     """Gated Recurrent Unit Architecture."""
+
     def __init__(self, input_dim: int):
         super(GRUModel, self).__init__()
-        self.gru = nn.GRU(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
+        self.gru = nn.GRU(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS,
+                          batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, hidden = self.gru(x)
         return self.fc(hidden[-1])
 
+
 # =====================================================================
 # CORE TRAINING LOOP
 # =====================================================================
-def train_model(model: nn.Module, train_loader: DataLoader, test_loader: DataLoader, model_name: str = "Model", trial: optuna.Trial = None) -> Tuple[nn.Module, list, list]:
+def train_model(
+        model: nn.Module,
+        train_loader: DataLoader,
+        test_loader: DataLoader,
+        model_name: str = "Model",
+        trial: optuna.Trial = None
+) -> Tuple[nn.Module, list, list]:
     """
     Standard Backpropagation/Gradient Descent training loop with early stopping.
 
@@ -292,13 +338,25 @@ def train_model(model: nn.Module, train_loader: DataLoader, test_loader: DataLoa
     model.load_state_dict(best_model_state)
     return model, train_losses, val_losses
 
+
 # =====================================================================
 # EVALUATION & VISUALIZATION
 # =====================================================================
-def evaluate_model(model: nn.Module, test_loader: DataLoader, scaler: MinMaxScaler, y_test_orig: np.ndarray) -> Tuple[Dict[str, float], np.ndarray]:
+def evaluate_model(
+        model: nn.Module, test_loader: DataLoader, scaler: MinMaxScaler, y_test_orig: np.ndarray) -> Tuple[
+    Dict[str, float], np.ndarray]:
     """
     Evaluates the model on the test set, inverse-transforms the predictions,
     and calculates standard forecasting metrics.
+
+    Args:
+        model (nn.Module): The trained PyTorch model.
+        test_loader (DataLoader): The DataLoader containing test set batches.
+        scaler (MinMaxScaler): The scaler fitted on the target training data.
+        y_test_orig (np.ndarray): The raw, unscaled ground truth values.
+
+    Returns:
+        Tuple: A dictionary containing metrics (RMSE, MAE, MAPE) and the array of predictions.
     """
     model.eval()
     y_pred_all = []
@@ -317,9 +375,32 @@ def evaluate_model(model: nn.Module, test_loader: DataLoader, scaler: MinMaxScal
     }
     return metrics, y_pred_orig
 
-def predict_and_plot_series(model: nn.Module, df_daily: pd.DataFrame, target_col: str, test_loader: DataLoader, scaler: MinMaxScaler, model_name: str, title: str, save_directory: str) -> plt.Figure:
+
+def predict_and_plot_series(
+        model: nn.Module,
+        df_daily: pd.DataFrame,
+        target_col: str,
+        test_loader: DataLoader,
+        scaler: MinMaxScaler,
+        model_name: str,
+        title: str,
+        save_directory: str
+) -> plt.Figure:
     """
     Generates and exports a line chart comparing the model's test predictions against reality.
+
+    Args:
+        model (nn.Module): The trained PyTorch model.
+        df_daily (pd.DataFrame): The full dataframe for historical plotting context.
+        target_col (str): The specific pollutant being plotted.
+        test_loader (DataLoader): The testing data.
+        scaler (MinMaxScaler): Scaler used to inverse transform predictions.
+        model_name (str): Model identifier for legends.
+        title (str): Output title for the plot.
+        save_directory (str): Destination folder for the image export.
+
+    Returns:
+        plt.Figure: The rendered Matplotlib figure.
     """
     model.eval()
     preds = []
@@ -343,7 +424,7 @@ def predict_and_plot_series(model: nn.Module, df_daily: pd.DataFrame, target_col
     plt.plot(pred_dates, predictions_real, color="red", label=f"{model_name} Forecast", linewidth=2.0)
     plt.axvline(pred_dates[0], color="blue", linestyle="--", alpha=0.6, label="Test Split")
 
-    plt.title(title, fontweight="bold")
+    plt.title(title.replace('_', ' '), fontweight="bold")
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend()
     plt.tight_layout()
@@ -351,6 +432,7 @@ def predict_and_plot_series(model: nn.Module, df_daily: pd.DataFrame, target_col
     os.makedirs(save_directory, exist_ok=True)
     fig.savefig(os.path.join(save_directory, f"{title}.png"), dpi=150)
     return fig
+
 
 # =====================================================================
 # THE MASTER ORCHESTRATOR
@@ -360,7 +442,7 @@ def model_looping(
         pollutant_features_map: dict,
         pollutants: tuple = ("NO2", "NOx", "O3", "PM10", "PM25"),
         optimized: bool = False,
-        hyperparameter_file: Path = Path("outputs/best_parameters.json")
+        hyperparameter_file: Path = Path(OUTPUT_DIR/"best_parameters.json")
 ) -> Dict[str, Any]:
     """
     Unified execution loop representing the final inference step of the ML pipeline.
@@ -402,7 +484,8 @@ def model_looping(
 
     # Execute training sweep
     for pollutant in pollutants:
-        if pollutant not in df_daily.columns: continue
+        if pollutant not in df_daily.columns:
+            continue
         print(f"\n{'=' * 70}\nTARGET: {pollutant} (MULTIVARIATE)\n{'=' * 70}")
 
         # 1. Dynamically fetch specific features for this pollutant
@@ -446,22 +529,25 @@ def model_looping(
             # 5. Evaluation & Visualization
             metrics, _ = evaluate_model(model, test_loader, scaler, y_test_orig)
             results_dict[pollutant] = metrics
-            print(f" [✓] MV-{model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f}, MAPE={metrics['MAPE']:.2f}%\n")
+            print(
+                f" [✓] MV-{model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f}, MAPE={metrics['MAPE']:.2f}%\n")
 
             fig = predict_and_plot_series(
                 model, df_daily, pollutant, test_loader, scaler,
-                title=f"MV-{model_name} Prediction - {pollutant}", save_directory="outputs/plots", model_name=model_name
+                title=f"MV-{model_name} Prediction - {pollutant}",
+                save_directory=str(MV_DIR/pollutant), model_name=model_name
             )
 
             if __name__ == "__main__":
                 plt.close(fig)
 
     # 6. Export finalized metrics to Pickle for Part 4 Comparison
-    with open("outputs/mv_results.pkl", "wb") as f:
+    with open(OUTPUT_DIR/"mv_DL_results.pkl", "wb") as f:
         pickle.dump(master_results, f)
     print("\n[✓] All Multivariate Neural Network results compiled and exported!")
 
     return master_results
+
 
 # =====================================================================
 # MAIN EXECUTION
@@ -470,19 +556,29 @@ if __name__ == "__main__":
     print("Loading data from Part 1...")
     try:
         df = pd.read_parquet(Path("outputs/rnn_multivariate_dataset.parquet"))
-        if "Timestamp" in df.columns: df = df.set_index("Timestamp")
-        elif "timestamp" in df.columns: df = df.set_index("timestamp")
+        if "Timestamp" in df.columns:
+            df = df.set_index("Timestamp")
+        elif "timestamp" in df.columns:
+            df = df.set_index("timestamp")
         df_daily = df.sort_index().interpolate(method='linear').dropna()
     except FileNotFoundError:
         print("[!] Dataset not found at outputs/rnn_multivariate_dataset.parquet")
         exit()
 
-    base_weather_features = ["sp", "u10", "v10"]
+    # Define the specific environmental drivers per pollutant
+    # Modify these keys and features to match your exact dataset columns
+    target_feature_map = {
+        "PM25": ["sp", "u10", "v10"],
+        "PM10": ["sp", "u10", "v10"],
+        "O3": ["sp", "u10", "v10"],
+        "NO2": ["sp", "u10", "v10"],
+        "NOx": ["sp", "u10", "v10"]
+    }
 
     # Pass optimized=True to automatically seek out and inject Optuna JSON parameters!
     model_looping(
         df_daily=df_daily,
-        base_features=base_weather_features,
+        pollutant_features_map=target_feature_map,
         pollutants=("NO2", "NOx", "PM10", "PM25", "O3"),
         optimized=True
     )
