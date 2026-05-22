@@ -1,11 +1,12 @@
 """
 URBAN POLLUTION FORECASTING — TUTORIAL FOR BEGINNERS
-Part 3 : Neural Networks for Time Series (Univariate)
+Part 3 : Neural Networks for Time Series (Multivariate)
 
 Description:
-    Core engine for training, evaluating, and visualizing Univariate (Single Variable)
-    Deep Learning models. Contains standard PyTorch architectures (RNN, LSTM, Bi-LSTM, GRU)
-    and a master orchestrator to load optimized parameters and train the final models.
+    Core engine for training, evaluating, and visualizing Multivariate
+    (Weather + Pollutant) Deep Learning models. Contains standard PyTorch
+    architectures (RNN, LSTM, Bi-LSTM, GRU) and a master orchestrator to load
+    optimized parameters and train the final models.
 """
 
 import os
@@ -15,7 +16,7 @@ import copy
 import logging
 import warnings
 from pathlib import Path
-from typing import Any, Tuple, Dict
+from typing import Any, Tuple, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,6 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
-import torch.nn.utils as nn_utils
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -55,13 +55,13 @@ else:
 #--------------------------------------------------------------------
 class Config:
     """
-    Global configuration state for the Univariate models.
+    Global configuration state for the Multivariate models.
     These values act as defaults and are dynamically overwritten by the
     JSON file during the final optimized inference loop.
     """
-    LOOK_BACK: int = 14
-    HORIZON: int = 14
-    BATCH_SIZE: int = 32
+    LOOK_BACK: int = 30
+    HORIZON: int = 7
+    BATCH_SIZE: int = 128
     EPOCHS: int = 100
     LEARNING_RATE: float = 0.001
     PATIENCE: int = 50
@@ -88,14 +88,16 @@ def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     mask = y_true != 0
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
 
-def make_sequences(data: np.ndarray, look_back: int = None, horizon: int = None) -> Tuple[np.ndarray, np.ndarray]:
+
+def make_sequences(features: np.ndarray, target: np.ndarray, look_back: int = None, horizon: int = None) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Slices a continuous 1D time series into overlapping X (input) and y (target) sequences.
+    Slices a continuous multivariate time series into overlapping X (input) and y (target) sequences.
 
     Args:
-        data (np.ndarray): The continuous series to be sliced.
-        look_back (int, optional): Number of historical steps to look at. Defaults to config.
-        horizon (int, optional): Number of future steps to predict. Defaults to config.
+        features (np.ndarray): 2D array of all feature columns (weather + pollutant).
+        target (np.ndarray): 1D or 2D array of the specific target to forecast.
+        look_back (int, optional): Number of historical steps. Defaults to config.
+        horizon (int, optional): Number of future steps. Defaults to config.
 
     Returns:
         Tuple[np.ndarray, np.ndarray]: X features matrix and y target matrix.
@@ -103,15 +105,15 @@ def make_sequences(data: np.ndarray, look_back: int = None, horizon: int = None)
     look_back = look_back if look_back is not None else config.LOOK_BACK
     horizon = horizon if horizon is not None else config.HORIZON
 
-    data = np.asarray(data)
     X, y = [], []
-    for i in range(len(data) - look_back - horizon + 1):
-        X.append(data[i : i + look_back])
-        y.append(data[i + look_back : i + look_back + horizon])
+    for i in range(len(features) - look_back - horizon + 1):
+        X.append(features[i : i + look_back, :])
+        y.append(target[i + look_back : i + look_back + horizon])
     return np.array(X), np.array(y)
 
-class PollutionDataset(Dataset):
-    """PyTorch Dataset wrapper optimized for converting numpy arrays to float tensors."""
+
+class MultivariatePollutionDataset(Dataset):
+    """PyTorch Dataset wrapper optimized for multivariate float tensors."""
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
@@ -120,87 +122,105 @@ class PollutionDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.X[idx], self.y[idx]
 
-def prepare_data(df: pd.DataFrame, pollutant: str, scaler: MinMaxScaler = None, test_fraction: float = None) -> Tuple[DataLoader, DataLoader, MinMaxScaler, np.ndarray]:
+
+def prepare_multivariate_data(
+        df: pd.DataFrame,
+        target_col: str,
+        feature_cols: List[str],
+        test_fraction: float = None
+) -> Tuple[DataLoader, DataLoader, MinMaxScaler, np.ndarray, int]:
     """
-    End-to-end data preparation pipeline for Univariate forecasting.
-    Scales the data, splits chronologically, and converts into PyTorch DataLoaders.
+    End-to-end data preparation pipeline for Multivariate forecasting.
+    Scales multiple features, splits chronologically, and prevents data leakage.
 
     Args:
         df (pd.DataFrame): The raw chronological dataframe.
-        pollutant (str): The specific column name to forecast.
-        scaler (MinMaxScaler, optional): An existing scaler to apply. If None, fits a new one.
+        target_col (str): The column name to forecast.
+        feature_cols (List[str]): List of all feature columns to feed the network.
         test_fraction (float, optional): Ratio of data to reserve for testing. Defaults to config.
 
     Returns:
-        Tuple: (train_loader, test_loader, fitted_scaler, raw_y_test_array)
+        Tuple: (train_loader, test_loader, target_scaler, raw_y_test_array, num_features)
     """
     test_fraction = test_fraction if test_fraction is not None else config.TEST_FRACTION
-    data = df[pollutant].values.astype(np.float32)
+    split_idx = int(len(df) * (1 - test_fraction))
 
-    if scaler is None:
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        data_scaled = scaler.fit_transform(data.reshape(-1, 1)).flatten()
-    else:
-        data_scaled = scaler.transform(data.reshape(-1, 1)).flatten()
+    train_df = df.iloc[:split_idx]
+    # Allow test_df to safely overlap with the look_back window to prevent prediction gaps
+    test_df = df.iloc[split_idx - config.LOOK_BACK:]
 
-    X, y = make_sequences(data_scaled)
-    if len(X) == 0:
-        raise ValueError("Dataset is too small for this LOOK_BACK + HORIZON configuration.")
+    train_features = train_df[feature_cols].values.astype(np.float32)
+    train_target = train_df[[target_col]].values.astype(np.float32)
 
-    split_idx = int(len(X) * (1 - test_fraction))
-    X_train, X_test = X[:split_idx], X[split_idx:]
-    y_train, y_test = y[:split_idx], y[split_idx:]
+    test_features = test_df[feature_cols].values.astype(np.float32)
+    test_target = test_df[[target_col]].values.astype(np.float32)
 
-    _, y_test_orig = make_sequences(data)
-    y_test_orig = y_test_orig[split_idx:]
+    feature_scaler = MinMaxScaler(feature_range=(0, 1))
+    target_scaler = MinMaxScaler(feature_range=(0, 1))
 
-    train_loader = DataLoader(PollutionDataset(X_train, y_train), batch_size=config.BATCH_SIZE, shuffle=True)
-    test_loader = DataLoader(PollutionDataset(X_test, y_test), batch_size=config.BATCH_SIZE, shuffle=False)
+    train_feat_scaled = feature_scaler.fit_transform(train_features)
+    train_tgt_scaled = target_scaler.fit_transform(train_target).flatten()
 
-    return train_loader, test_loader, scaler, y_test_orig
+    test_feat_scaled = feature_scaler.transform(test_features)
+    test_tgt_scaled = target_scaler.transform(test_target).flatten()
+
+    X_train, y_train = make_sequences(train_feat_scaled, train_tgt_scaled)
+    X_test, y_test = make_sequences(test_feat_scaled, test_tgt_scaled)
+
+    _, y_test_orig = make_sequences(test_features, test_target.flatten())
+
+    if len(X_train) == 0 or len(X_test) == 0:
+        raise ValueError(f"Dataset is too small for LOOK_BACK={config.LOOK_BACK} and HORIZON={config.HORIZON}.")
+
+    use_pin_memory = torch.cuda.is_available()
+
+    train_loader = DataLoader(MultivariatePollutionDataset(X_train, y_train), batch_size=config.BATCH_SIZE, shuffle=True, pin_memory=use_pin_memory)
+    test_loader = DataLoader(MultivariatePollutionDataset(X_test, y_test), batch_size=config.BATCH_SIZE, shuffle=False, pin_memory=use_pin_memory)
+
+    return train_loader, test_loader, target_scaler, y_test_orig, len(feature_cols)
 
 # =====================================================================
 # MODELS (RNN, LSTM, Bi-LSTM, GRU)
 # =====================================================================
 class RNNModel(nn.Module):
     """Standard Recurrent Neural Network Architecture."""
-    def __init__(self, input_dim: int = 1):
+    def __init__(self, input_dim: int):
         super(RNNModel, self).__init__()
         self.rnn = nn.RNN(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        output, hidden = self.rnn(x.unsqueeze(-1))
+        _, hidden = self.rnn(x)
         return self.fc(hidden[-1])
 
 class LSTMModel(nn.Module):
     """Long Short-Term Memory Architecture."""
-    def __init__(self, input_dim: int = 1):
+    def __init__(self, input_dim: int):
         super(LSTMModel, self).__init__()
         self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        output, (hidden, cell) = self.lstm(x.unsqueeze(-1))
+        _, (hidden, cell) = self.lstm(x)
         return self.fc(hidden[-1])
 
 class BiLSTMModel(nn.Module):
     """Bidirectional Long Short-Term Memory Architecture."""
-    def __init__(self, input_dim: int = 1):
+    def __init__(self, input_dim: int):
         super(BiLSTMModel, self).__init__()
         self.lstm = nn.LSTM(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True, bidirectional=True)
         self.fc = nn.Linear(config.HIDDEN_DIM * 2, config.HORIZON)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        output, (hidden, cell) = self.lstm(x.unsqueeze(-1))
+        _, (hidden, cell) = self.lstm(x)
         # Concatenate the final forward state and final backward state
         return self.fc(torch.cat((hidden[-2], hidden[-1]), dim=1))
 
 class GRUModel(nn.Module):
     """Gated Recurrent Unit Architecture."""
-    def __init__(self, input_dim: int = 1):
+    def __init__(self, input_dim: int):
         super(GRUModel, self).__init__()
         self.gru = nn.GRU(input_size=input_dim, hidden_size=config.HIDDEN_DIM, num_layers=config.NUM_LAYERS, batch_first=True)
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        output, hidden = self.gru(x.unsqueeze(-1))
+        _, hidden = self.gru(x)
         return self.fc(hidden[-1])
 
 # =====================================================================
@@ -286,7 +306,8 @@ def evaluate_model(model: nn.Module, test_loader: DataLoader, scaler: MinMaxScal
         for X_batch, _ in test_loader:
             y_pred_all.append(model(X_batch.to(device)).cpu().numpy())
 
-    y_pred_orig = scaler.inverse_transform(np.vstack(y_pred_all).flatten().reshape(-1, 1)).flatten()
+    y_pred_scaled = np.vstack(y_pred_all)
+    y_pred_orig = scaler.inverse_transform(y_pred_scaled.flatten().reshape(-1, 1)).flatten()
     y_true_orig = y_test_orig.flatten()
 
     metrics = {
@@ -296,16 +317,7 @@ def evaluate_model(model: nn.Module, test_loader: DataLoader, scaler: MinMaxScal
     }
     return metrics, y_pred_orig
 
-def predict_and_plot_series(
-        model: nn.Module,
-        df_daily: pd.DataFrame,
-        pollutant: str,
-        test_loader: DataLoader,
-        scaler: MinMaxScaler,
-        model_name: str,
-        title: str,
-        save_directory: str
-) -> plt.Figure:
+def predict_and_plot_series(model: nn.Module, df_daily: pd.DataFrame, target_col: str, test_loader: DataLoader, scaler: MinMaxScaler, model_name: str, title: str, save_directory: str) -> plt.Figure:
     """
     Generates and exports a line chart comparing the model's test predictions against reality.
     """
@@ -315,7 +327,8 @@ def predict_and_plot_series(
         for X_batch, _ in test_loader:
             preds.append(model(X_batch.to(device)).cpu().numpy()[:, 0])
 
-    predictions_real = scaler.inverse_transform(np.concatenate(preds).reshape(-1, 1)).flatten()
+    predictions_scaled = np.concatenate(preds).reshape(-1, 1)
+    predictions_real = scaler.inverse_transform(predictions_scaled).flatten()
 
     # Calculate index alignment for the plot
     total_sequences = len(df_daily) - config.LOOK_BACK - config.HORIZON + 1
@@ -325,8 +338,8 @@ def predict_and_plot_series(
     pred_dates = df_daily.index[start_date_idx: start_date_idx + len(predictions_real)]
 
     fig = plt.figure(figsize=(14, 6))
-    plt.plot(df_daily.index, df_daily[pollutant], color="lightgray", label="Observed Data", alpha=0.8)
-    plt.plot(pred_dates, df_daily[pollutant].loc[pred_dates], color="black", label="True Future", linewidth=1.5)
+    plt.plot(df_daily.index, df_daily[target_col], color="lightgray", label="Observed Data", alpha=0.8)
+    plt.plot(pred_dates, df_daily[target_col].loc[pred_dates], color="black", label="True Future", linewidth=1.5)
     plt.plot(pred_dates, predictions_real, color="red", label=f"{model_name} Forecast", linewidth=2.0)
     plt.axvline(pred_dates[0], color="blue", linestyle="--", alpha=0.6, label="Test Split")
 
@@ -334,6 +347,8 @@ def predict_and_plot_series(
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend()
     plt.tight_layout()
+
+    os.makedirs(save_directory, exist_ok=True)
     fig.savefig(os.path.join(save_directory, f"{title}.png"), dpi=150)
     return fig
 
@@ -342,19 +357,23 @@ def predict_and_plot_series(
 # =====================================================================
 def model_looping(
         df_daily: pd.DataFrame,
+        pollutant_features_map: dict,
         pollutants: tuple = ("NO2", "NOx", "O3", "PM10", "PM25"),
         optimized: bool = False,
         hyperparameter_file: Path = Path("outputs/best_parameters.json")
 ) -> Dict[str, Any]:
     """
     Unified execution loop representing the final inference step of the ML pipeline.
-    It iterates through all specified pollutants, safely loads their optimized hyperparameters
-    (if available), trains all four baseline deep learning models, evaluates them,
-    and dumps a consolidated Pickle file for the comparison module.
+    It iterates through all specified pollutants, fetches their specific explanatory weather
+    features from a dictionary, safely loads optimized hyperparameters (if available),
+    trains all four deep learning models, evaluates them, and dumps a consolidated Pickle
+    file for the comparison module.
 
     Args:
         df_daily (pd.DataFrame): Daily resampled dataset.
-        pollutants (tuple): List of targets to loop over.
+        pollutant_features_map (dict): Dictionary mapping pollutants (keys) to their most
+                                       explicative environmental variables (list of strings).
+        pollutants (tuple): List of target pollutants to loop over.
         optimized (bool): If True, forces the script to override defaults using the JSON file.
         hyperparameter_file (Path): Path to the JSON containing Optuna's best results.
 
@@ -384,13 +403,21 @@ def model_looping(
     # Execute training sweep
     for pollutant in pollutants:
         if pollutant not in df_daily.columns: continue
-        print(f"\n{'=' * 70}\nTARGET: {pollutant}\n{'=' * 70}")
+        print(f"\n{'=' * 70}\nTARGET: {pollutant} (MULTIVARIATE)\n{'=' * 70}")
+
+        # 1. Dynamically fetch specific features for this pollutant
+        env_features = pollutant_features_map.get(pollutant, [])
+
+        # Safely append the target pollutant for autoregression without duplicating it
+        feature_cols = env_features.copy()
+        if pollutant not in feature_cols:
+            feature_cols.append(pollutant)
 
         for model_name, (ModelClass, results_dict) in models_to_test.items():
 
-            # 1. Inject Hyperparameters
+            # 2. Inject Hyperparameters
             if optimized:
-                json_key = f"SV-{model_name}"
+                json_key = f"MV-{model_name}"
                 if pollutant in optuna_params and json_key in optuna_params[pollutant]:
                     p = optuna_params[pollutant][json_key]["Hyperparameters"]
                     config.LOOK_BACK = p.get("LOOK_BACK", config.LOOK_BACK)
@@ -399,39 +426,40 @@ def model_looping(
                     config.LEARNING_RATE = p.get("LEARNING_RATE", config.LEARNING_RATE)
                     config.HIDDEN_DIM = p.get("HIDDEN_DIM", config.HIDDEN_DIM)
                     config.NUM_LAYERS = p.get("NUM_LAYERS", config.NUM_LAYERS)
-                    print(f" [⚙] Injected Optimized Parameters for {model_name}")
+                    print(f" [⚙] Injected Optimized Parameters for MV-{model_name}")
                 else:
                     print(f" [-] No optimized params found for {json_key}. Using defaults.")
 
-            # 2. Reslice data based on (potentially) modified LOOK_BACK and BATCH_SIZE
+            # 3. Reslice data dynamically
             try:
-                train_loader, test_loader, scaler, y_test_orig = prepare_data(df_daily, pollutant)
+                train_loader, test_loader, scaler, y_test_orig, num_features = prepare_multivariate_data(
+                    df_daily, target_col=pollutant, feature_cols=feature_cols
+                )
             except ValueError as e:
                 print(f" [!] Skipping {model_name}: {e}")
                 continue
 
-            # 3. Model Training
-            model = ModelClass()
-            model, _, _ = train_model(model, train_loader, test_loader, model_name=f"{model_name} ({pollutant})")
+            # 4. Model Training (Pass dynamic num_features to the PyTorch architecture)
+            model = ModelClass(input_dim=num_features)
+            model, _, _ = train_model(model, train_loader, test_loader, model_name=f"MV-{model_name} ({pollutant})")
 
-            # 4. Evaluation & Visualization
+            # 5. Evaluation & Visualization
             metrics, _ = evaluate_model(model, test_loader, scaler, y_test_orig)
             results_dict[pollutant] = metrics
-            print(f" [✓] {model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f}, MAPE={metrics['MAPE']:.2f}%\n")
+            print(f" [✓] MV-{model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f}, MAPE={metrics['MAPE']:.2f}%\n")
 
             fig = predict_and_plot_series(
                 model, df_daily, pollutant, test_loader, scaler,
-                title=f"{model_name} Prediction - {pollutant}", save_directory="outputs/plots", model_name=model_name
+                title=f"MV-{model_name} Prediction - {pollutant}", save_directory="outputs/plots", model_name=model_name
             )
 
-            # Ensures that figures render safely inside Jupyter Notebooks if returned, but close to save RAM in standard console runs
             if __name__ == "__main__":
                 plt.close(fig)
 
-    # 5. Export finalized metrics to Pickle for Part 4 Comparison
-    with open("outputs/sv_nn_results.pkl", "wb") as f:
+    # 6. Export finalized metrics to Pickle for Part 4 Comparison
+    with open("outputs/mv_results.pkl", "wb") as f:
         pickle.dump(master_results, f)
-    print("\n[✓] All SV Neural Network results compiled and exported!")
+    print("\n[✓] All Multivariate Neural Network results compiled and exported!")
 
     return master_results
 
@@ -441,17 +469,20 @@ def model_looping(
 if __name__ == "__main__":
     print("Loading data from Part 1...")
     try:
-        df = pd.read_parquet(Path("outputs/consolidated_pollutants.parquet"))
+        df = pd.read_parquet(Path("outputs/rnn_multivariate_dataset.parquet"))
         if "Timestamp" in df.columns: df = df.set_index("Timestamp")
         elif "timestamp" in df.columns: df = df.set_index("timestamp")
-        df_daily = df.resample("D").mean().interpolate(method='linear')
+        df_daily = df.sort_index().interpolate(method='linear').dropna()
     except FileNotFoundError:
-        print("[!] Dataset not found.")
+        print("[!] Dataset not found at outputs/rnn_multivariate_dataset.parquet")
         exit()
+
+    base_weather_features = ["sp", "u10", "v10"]
 
     # Pass optimized=True to automatically seek out and inject Optuna JSON parameters!
     model_looping(
         df_daily=df_daily,
+        base_features=base_weather_features,
         pollutants=("NO2", "NOx", "PM10", "PM25", "O3"),
         optimized=True
     )
