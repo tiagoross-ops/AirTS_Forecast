@@ -67,11 +67,11 @@ class Config:
     LOOK_BACK: int = 30
     HORIZON: int = 7
     BATCH_SIZE: int = 128
-    EPOCHS: int = 100
+    EPOCHS: int = 50
     LEARNING_RATE: float = 0.001
-    PATIENCE: int = 50
-    HIDDEN_DIM: int = 256
-    NUM_LAYERS: int = 2
+    PATIENCE: int = 20
+    HIDDEN_DIM: int = 128
+    NUM_LAYERS: int = 6
     TEST_FRACTION: float = 0.2
 
 
@@ -94,6 +94,13 @@ def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """
     mask = y_true != 0
     return float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
+
+
+def r_2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    mask = y_true != 0
+    ss_res = float(np.sum((y_true - y_pred) ** 2))
+    ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
+    return float(1 - ss_res / ss_tot)
 
 
 def make_sequences(features: np.ndarray, target: np.ndarray, look_back: int = None, horizon: int = None) -> Tuple[
@@ -263,6 +270,178 @@ class GRUModel(nn.Module):
         return self.fc(hidden[-1])
 
 
+class HybridRNNLSTMModel(nn.Module):
+    """Hybrid Architecture combining an RNN feature extractor with LSTM memory."""
+
+    def __init__(self, input_dim: int = 1):
+        super(HybridRNNLSTMModel, self).__init__()
+
+        # 1. The Input Layer: Standard RNN
+        # We restrict num_layers=1 here so it acts as a single transitional layer.
+        self.rnn = nn.RNN(
+            input_size=input_dim,
+            hidden_size=config.HIDDEN_DIM,
+            num_layers=1,
+            batch_first=True
+        )
+
+        # 2. The Deep Layer: LSTM
+        # Notice the input_size is now config.HIDDEN_DIM (the output size of the RNN layer)
+        self.lstm = nn.LSTM(
+            input_size=config.HIDDEN_DIM,
+            hidden_size=config.HIDDEN_DIM,
+            num_layers=1,
+            batch_first=True
+        )
+
+        # 3. The Output Layer
+        self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Step 0: Prepare input shape (Batch, Sequence Length, Features)
+        if len(x.shape) == 2:
+            x = x.unsqueeze(-1)
+
+        # Step 1: Pass data through the RNN
+        # rnn_out contains the hidden states for EVERY step in the sequence.
+        # rnn_hidden is just the very last state. We want the full sequence.
+        rnn_out, rnn_hidden = self.rnn(x)
+
+        # Step 2: Feed the RNN's full sequential output into the LSTM
+        lstm_out, (lstm_hidden, lstm_cell) = self.lstm(rnn_out)
+
+        # Step 3: Extract the final hidden state of the LSTM for the fully connected layer
+        return self.fc(lstm_hidden[-1])
+
+
+class CNNModel(nn.Module):
+    """
+    1D Convolutional Neural Network Architecture for Time Series.
+    Uses an Adaptive Pool to gracefully handle dynamic Optuna Look-Back sequences.
+    """
+    def __init__(self, input_dim: int = 1):
+        super(CNNModel, self).__init__()
+
+        # Dynamically build layers based on Optuna's NUM_LAYERS config
+        layers = []
+        in_channels = input_dim
+
+        for i in range(config.NUM_LAYERS):
+            # The final conv layer outputs exactly the HIDDEN_DIM requested by Optuna.
+            # Intermediate layers use a fixed 64 channels to prevent parameter explosion.
+            out_channels = config.HIDDEN_DIM if i == (config.NUM_LAYERS - 1) else 64
+
+            layers.append(nn.Conv1d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=3,
+                padding=1 # Padding=1 ensures the sequence length doesn't shrink prematurely
+            ))
+            layers.append(nn.ReLU())
+            in_channels = out_channels
+
+        self.conv_block = nn.Sequential(*layers)
+
+        # Adaptive pooling squashes whatever sequence length is left into a single value per channel
+        # This makes the model crash-proof against Optuna changing the LOOK_BACK!
+        self.global_pool = nn.AdaptiveMaxPool1d(1)
+
+        # Final projection to our forecasting horizon
+        self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # If Univariate, x comes in as [Batch, Seq_Len]. We need it to be 3D.
+        if len(x.shape) == 2:
+            x = x.unsqueeze(-1)
+
+        # CRITICAL FIX: Transpose from (Batch, Seq_Len, Features) to (Batch, Features, Seq_Len)
+        x = x.transpose(1, 2)
+
+        # Pass through the Convolutional filters
+        x = self.conv_block(x)
+
+        # Pool across the time dimension: (Batch, Hidden_Dim, Seq_Len) -> (Batch, Hidden_Dim, 1)
+        x = self.global_pool(x)
+
+        # Squeeze the final dimension to match the Linear layer: -> (Batch, Hidden_Dim)
+        x = x.squeeze(-1)
+
+        return self.fc(x)
+
+
+class HybridCNNLSTMModel(nn.Module):
+    """
+    Hybrid CNN-LSTM Architecture for Time-Series/Sequence Processing.
+    Perfectly integrated with the ML-Ops global config.
+    """
+    def __init__(self, input_dim: int = 1):
+        super(HybridCNNLSTMModel, self).__init__()
+
+        # ==========================================
+        # 1. The CNN Block (Feature Extraction)
+        # ==========================================
+        # We use a fixed 64 channels for the CNN to act as a feature compressor,
+        # preventing the parameter count from exploding before the LSTM.
+        cnn_out_channels = 64
+
+        self.conv1d = nn.Conv1d(
+            in_channels=input_dim,
+            out_channels=cnn_out_channels,
+            kernel_size=3,
+            padding=1  # Padding=1 keeps the sequence length the same after convolution
+        )
+        self.relu = nn.ReLU()
+
+        # Pooling reduces the sequence length by half, concentrating the most important features
+        self.pool = nn.MaxPool1d(kernel_size=2)
+
+        # ==========================================
+        # 2. The LSTM Block (Temporal Processing)
+        # ==========================================
+        # The LSTM takes the CNN's 64 output channels as its input features.
+        # It uses config.HIDDEN_DIM so Optuna can actively tune its memory capacity!
+        self.lstm = nn.LSTM(
+            input_size=cnn_out_channels,
+            hidden_size=config.HIDDEN_DIM,
+            num_layers=config.NUM_LAYERS,
+            batch_first=True
+        )
+
+        # ==========================================
+        # 3. The Output Block
+        # ==========================================
+        # Projects the final memory state into our required forecasting horizon (7 days)
+        self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass handling the strict dimensional requirements of PyTorch CNNs and LSTMs.
+        Automatically scales 2D Univariate data to 3D.
+        """
+        # [FIX 1]: Safely convert 2D Univariate inputs to 3D before transposing
+        if len(x.shape) == 2:
+            x = x.unsqueeze(-1)
+
+        # STEP 1: Dimensionality Shift for CNN -> [Batch, Features, Sequence_Length]
+        x = x.transpose(1, 2)
+
+        # STEP 2: CNN Feature Extraction
+        x = self.conv1d(x)
+        x = self.relu(x)
+        x = self.pool(x)  # Sequence length is now halved
+
+        # STEP 3: Dimensionality Shift for LSTM -> [Batch, Sequence_Length_Halved, Features]
+        x = x.transpose(1, 2)
+
+        # STEP 4: LSTM Temporal Processing
+        lstm_out, (hidden, cell) = self.lstm(x)
+
+        # STEP 5: Final Prediction
+        # hidden[-1] grabs the hidden state from the final depth layer of the LSTM
+        out = self.fc(hidden[-1])
+
+        return out
+
 # =====================================================================
 # CORE TRAINING LOOP
 # =====================================================================
@@ -271,7 +450,8 @@ def train_model(
         train_loader: DataLoader,
         test_loader: DataLoader,
         model_name: str = "Model",
-        trial: optuna.Trial = None
+        trial: optuna.Trial = None,
+        verbose: bool = False,
 ) -> Tuple[nn.Module, list, list]:
     """
     Standard Backpropagation/Gradient Descent training loop with early stopping.
@@ -283,9 +463,11 @@ def train_model(
         model_name (str): Identifier used for print logs.
         trial (optuna.Trial, optional): Passed exclusively during hyperparameter searches
                                         to allow Optuna to prune unpromising models early.
+        verbose (bool):
 
     Returns:
         Tuple: The trained model with best weights restored, list of train losses, list of val losses.
+
     """
     model = model.to(device)
     criterion = nn.MSELoss()
@@ -295,7 +477,7 @@ def train_model(
     best_val_loss, patience_counter = np.inf, 0
     best_model_state = copy.deepcopy(model.state_dict())
 
-    print(f"\n[>] Training {model_name}...")
+    if verbose: print(f"\n[>] Training {model_name}...")
     for epoch in range(config.EPOCHS):
         model.train()
         train_loss = 0.0
@@ -317,22 +499,24 @@ def train_model(
                 val_loss += criterion(model(X.to(device)), y.to(device)).item()
         val_loss /= len(test_loader)
 
-        # Optuna Pruning Hook
         if trial is not None:
             trial.report(val_loss, epoch)
             if trial.should_prune():
-                print(f" [!] Trial pruned by Optuna at epoch {epoch + 1}.")
+                if verbose: print(f" [!] Trial pruned by Optuna at epoch {epoch + 1}.")
                 raise optuna.exceptions.TrialPruned()
 
-        # Early Stopping Logic
         if val_loss < best_val_loss:
             best_val_loss, patience_counter = val_loss, 0
             best_model_state = copy.deepcopy(model.state_dict())
+            if verbose and ((epoch + 1) % 10 == 0 or epoch < 5):
+                print(f" Epoch {epoch + 1:3d}/{config.EPOCHS}: Train={train_loss:.5f}, Val={val_loss:.5f} [NEW BEST]")
         else:
             patience_counter += 1
+            if verbose and ((epoch + 1) % 10 == 0):
+                print(f" Epoch {epoch + 1:3d}/{config.EPOCHS}: Train={train_loss:.5f}, Val={val_loss:.5f} (Patience {patience_counter}/{config.PATIENCE})")
 
         if patience_counter >= config.PATIENCE:
-            print(f" [!] Early stopping triggered at epoch {epoch + 1}.")
+            if verbose: print(f" [!] Early stopping triggered at epoch {epoch + 1}.")
             break
 
     model.load_state_dict(best_model_state)
@@ -371,7 +555,8 @@ def evaluate_model(
     metrics = {
         "RMSE": float(np.sqrt(mean_squared_error(y_true_orig, y_pred_orig))),
         "MAE": float(mean_absolute_error(y_true_orig, y_pred_orig)),
-        "MAPE": mape(y_true_orig, y_pred_orig)
+        "MAPE": mape(y_true_orig, y_pred_orig),
+        "R^2": r_2(y_true_orig, y_pred_orig)
     }
     return metrics, y_pred_orig
 
@@ -419,7 +604,7 @@ def predict_and_plot_series(
     pred_dates = df_daily.index[start_date_idx: start_date_idx + len(predictions_real)]
 
     fig = plt.figure(figsize=(14, 6))
-    plt.plot(df_daily.index, df_daily[target_col], color="lightgray", label="Observed Data", alpha=0.8)
+    # plt.plot(df_daily.index, df_daily[target_col], color="lightgray", label="Observed Data", alpha=0.8)
     plt.plot(pred_dates, df_daily[target_col].loc[pred_dates], color="black", label="True Future", linewidth=1.5)
     plt.plot(pred_dates, predictions_real, color="red", label=f"{model_name} Forecast", linewidth=2.0)
     plt.axvline(pred_dates[0], color="blue", linestyle="--", alpha=0.6, label="Test Split")
@@ -462,14 +647,19 @@ def model_looping(
     Returns:
         Dict: A master dictionary containing performance metrics for every model across all pollutants.
     """
-    master_results = {"rnn_results": {}, "lstm_results": {}, "bilstm_results": {}, "gru_results": {}}
+    master_results = {"rnn_results": {}, "lstm_results": {}, "bilstm_results": {}, "gru_results": {},
+                      "hy_rnn_lstm_results": {}, "cnn_results": {}, "hy-cnn-lstm_results": {}}
 
     # Define suite mapping to streamline the training loop
     models_to_test = {
         "RNN": (RNNModel, master_results["rnn_results"]),
         "LSTM": (LSTMModel, master_results["lstm_results"]),
         "Bi-LSTM": (BiLSTMModel, master_results["bilstm_results"]),
-        "GRU": (GRUModel, master_results["gru_results"])
+        "GRU": (GRUModel, master_results["gru_results"]),
+        "Hybrid-RNN-LSTM": (HybridRNNLSTMModel, master_results["hy_rnn_lstm_results"]),
+        # "CNN": (CNNModel, master_results["cnn_results"]),
+        # "Hybrid-CNN-LSTM":(HybridCNNLSTMModel, master_results["hy_rnn_lstm_results"])
+
     }
 
     # Load Hyperparameters safely into memory
@@ -501,8 +691,10 @@ def model_looping(
             # 2. Inject Hyperparameters
             if optimized:
                 json_key = f"MV-{model_name}"
+                json_key_sv = f"SV-{model_name}"
+
                 if pollutant in optuna_params and json_key in optuna_params[pollutant]:
-                    p = optuna_params[pollutant][json_key]["Hyperparameters"]
+                    p = optuna_params[pollutant][json_key]["Balanced_Hyperparameters"]
                     config.LOOK_BACK = p.get("LOOK_BACK", config.LOOK_BACK)
                     config.HORIZON = p.get("HORIZON", config.HORIZON)
                     config.BATCH_SIZE = p.get("BATCH_SIZE", config.BATCH_SIZE)
@@ -510,6 +702,15 @@ def model_looping(
                     config.HIDDEN_DIM = p.get("HIDDEN_DIM", config.HIDDEN_DIM)
                     config.NUM_LAYERS = p.get("NUM_LAYERS", config.NUM_LAYERS)
                     print(f" [⚙] Injected Optimized Parameters for MV-{model_name}")
+                elif pollutant in optuna_params and json_key_sv in optuna_params[pollutant]:
+                    p = optuna_params[pollutant][json_key_sv]["Balanced_Hyperparameters"]
+                    config.LOOK_BACK = p.get("LOOK_BACK", config.LOOK_BACK)
+                    config.HORIZON = p.get("HORIZON", config.HORIZON)
+                    config.BATCH_SIZE = p.get("BATCH_SIZE", config.BATCH_SIZE)
+                    config.LEARNING_RATE = p.get("LEARNING_RATE", config.LEARNING_RATE)
+                    config.HIDDEN_DIM = p.get("HIDDEN_DIM", config.HIDDEN_DIM)
+                    config.NUM_LAYERS = p.get("NUM_LAYERS", config.NUM_LAYERS)
+                    print(f" [⚙] Using Optimized Parameters for Single Variable model - {model_name}")
                 else:
                     print(f" [-] No optimized params found for {json_key}. Using defaults.")
 
@@ -530,7 +731,8 @@ def model_looping(
             metrics, _ = evaluate_model(model, test_loader, scaler, y_test_orig)
             results_dict[pollutant] = metrics
             print(
-                f" [✓] MV-{model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f}, MAPE={metrics['MAPE']:.2f}%\n")
+                f" [✓] MV-{model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f},"
+                f" MAPE={metrics['MAPE']:.2f}%, R^2={metrics['R^2']:.2f}%\\n")
 
             fig = predict_and_plot_series(
                 model, df_daily, pollutant, test_loader, scaler,
@@ -579,6 +781,6 @@ if __name__ == "__main__":
     model_looping(
         df_daily=df_daily,
         pollutant_features_map=target_feature_map,
-        pollutants=("NO2", "NOx", "PM10", "PM25", "O3"),
+        pollutants=("NO2", "O3"),
         optimized=True
     )

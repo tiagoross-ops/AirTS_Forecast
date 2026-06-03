@@ -62,7 +62,7 @@ ANALYSIS_KWARGS = {
 
     # Figure styling settings
     "figsize": (6, 6),
-    "color": "teal",
+    "color": '#d563a1',
     "marker": "o",
     "markerfacecolor": "red",
     "markeredgecolor": "red",
@@ -289,7 +289,7 @@ def visualize_pollution_timeseries(
         # 3.1 Defining different series
         for i, (ax, series) in enumerate(zip(axes, ordered_series)):
             ax.plot(series.index, series.values,
-                    color=base_color,
+                    color='#D563A1',
                     marker=marker_style, markersize=marker_size,
                     markeredgecolor=markeredgecolor, markerfacecolor=markerfacecolor,
                     linestyle=line_style, linewidth=line_width)
