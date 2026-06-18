@@ -16,7 +16,7 @@ Geographic Boundary Filtering: Utilizes OpenStreetMap (OSMnx) and Shapely to cal
 
 Automated Reporting: Exports statistics to multi-sheet Excel workbooks and compiles hundreds of 3D Matplotlib plots into centralized, multi-page PDF reports.
 
-🗂️ Directory Structure
+🗂️ Directory Structure (Updated)
 The pipeline expects and generates the following directory structure:
 
 Plaintext
