@@ -54,7 +54,7 @@ Located in EnvironmentalDataAnalysis and the root directory. This module handles
 2. Exploratory Data Analysis (EDA)
 Highly modularized visual exploration. Evaluates seasonal trends, monthly averages, and spatial correlations to determine the optimal subset of environmental features to feed into the forecasting models.
 
-3. Classical Time-Series Baselines
+3. Classical Time-Series Baselines 
 Scripts utilizing ARIMA, SARIMA, and Holt-Winters architectures. These models establish the performance floor, utilizing exact mathematical derivation and Response Surface Methodology (RSM) for grid tuning.
 
 4. Deep Learning & Hyperparameter Search
