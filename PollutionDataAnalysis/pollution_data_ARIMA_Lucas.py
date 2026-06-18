@@ -46,20 +46,21 @@ ANALYSIS_KWARGS = {
     "forecast_horizon_steps": None,
 
     # ARIMA
-    "arima_order": (7, 1, 1),
+    "arima_order": (2, 1, 0),
 
     # ARIMAX (Fourier handles seasonality)
-    "sarima_order": (1, 1, 1),
+    "sarima_order": (3, 1, 3),
     "sarima_seasonal_order": (0, 0, 0, 0),
 
     # Fourier Cycles (Weekly & Annual)
     "fourier_periods": (7, 365.25),
-    "fourier_order": 2,
+    "fourier_order": 4,
 
     # Holt-Winters
-    "holt_winters_trend": "add",
+    "holt_winters_trend": None,
     "holt_winters_seasonal": "add",
     "holt_winters_seasonal_periods": 7,
+    "damped": False
 }
 
 MODEL_COLORS = {

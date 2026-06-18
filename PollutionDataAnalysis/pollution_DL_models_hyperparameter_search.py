@@ -72,7 +72,7 @@ def _instantiate_model(architecture: str, model_name: str, input_dim: int = 1) -
         elif model_name == "LSTM": return mv.LSTMModel(input_dim=input_dim)
         elif model_name == "Bi-LSTM": return mv.BiLSTMModel(input_dim=input_dim)
         elif model_name == "GRU": return mv.GRUModel(input_dim=input_dim)
-        elif model_name == "Hy-RNN-LSTM": return mv.HybridRNNLSTMModel()
+        elif model_name == "Hy-RNN-LSTM": return mv.HybridRNNLSTMModel(input_dim=input_dim)
         elif model_name == "CNN": return mv.CNNModel()
         elif model_name == "Hy-CNN-LSTM": return mv.HybridCNNLSTMModel()
 
@@ -156,7 +156,7 @@ def objective_sv(
                  f"B{sv.config.BATCH_SIZE}_LB{sv.config.LOOK_BACK}_H{sv.config.HORIZON}")
         study_plot = sv.predict_and_plot_series(
             model, df_daily, target_col,
-            test_loader, scaler, model_name,
+            test_loader, scaler, y_test_orig, model_name,
             title, save_directory=str(save_dir)
         )
         plt.close(study_plot)
@@ -189,7 +189,7 @@ def objective_multivariate(
                  f"B{sv.config.BATCH_SIZE}_LB{sv.config.LOOK_BACK}_H{sv.config.HORIZON}")
         study_plot = sv.predict_and_plot_series(
             model, df_daily, target_col,
-            test_loader, scaler, model_name,
+            test_loader, scaler, y_test_orig, model_name,
             title.replace('_', ' '),
             save_directory=str(PLOT_DIR_MV/study_name)
         )
@@ -261,9 +261,8 @@ def _retrain_and_plot_pareto_front(
         # Save individual plot securely
         plot_name = f"PARETO_TRIAL_{trial.number}_{architecture}_{model_name}_{target_col}"
         fig = mod.predict_and_plot_series(
-            final_model, df_daily, target_col, test_loader, scaler,
-            title=plot_name.replace("_", " "), save_directory=str(plot_dir), model_name=model_name
-        )
+            final_model, df_daily, target_col, test_loader, scaler, y_test_orig,
+            title=plot_name.replace("_", " "), save_directory=str(plot_dir), model_name=model_name)
         plt.close(fig)
 
     print(f"[✓] {len(best_trials)} Champion plots and metrics successfully exported.\n")

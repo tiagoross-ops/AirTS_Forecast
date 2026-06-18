@@ -16,7 +16,7 @@ import copy
 import logging
 import warnings
 from pathlib import Path
-from typing import Any, Tuple, Dict, List
+from typing import Any, Tuple, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -271,46 +271,28 @@ class GRUModel(nn.Module):
 
 
 class HybridRNNLSTMModel(nn.Module):
-    """Hybrid Architecture combining an RNN feature extractor with LSTM memory."""
+    """Hybrid RNN-LSTM Architecture."""
 
-    def __init__(self, input_dim: int = 1):
+    def __init__(self, input_dim: int):
         super(HybridRNNLSTMModel, self).__init__()
 
-        # 1. The Input Layer: Standard RNN
-        # We restrict num_layers=1 here so it acts as a single transitional layer.
-        self.rnn = nn.RNN(
-            input_size=input_dim,
-            hidden_size=config.HIDDEN_DIM,
-            num_layers=1,
-            batch_first=True
-        )
+        self.rnn = nn.RNN(input_size=input_dim, hidden_size=config.HIDDEN_DIM,
+                          num_layers=config.NUM_LAYERS, batch_first=True)
 
-        # 2. The Deep Layer: LSTM
-        # Notice the input_size is now config.HIDDEN_DIM (the output size of the RNN layer)
-        self.lstm = nn.LSTM(
-            input_size=config.HIDDEN_DIM,
-            hidden_size=config.HIDDEN_DIM,
-            num_layers=1,
-            batch_first=True
-        )
+        self.lstm = nn.LSTM(input_size=config.HIDDEN_DIM, hidden_size=config.HIDDEN_DIM,
+                            num_layers=config.NUM_LAYERS, batch_first=True)
 
-        # 3. The Output Layer
         self.fc = nn.Linear(config.HIDDEN_DIM, config.HORIZON)
 
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Step 0: Prepare input shape (Batch, Sequence Length, Features)
-        if len(x.shape) == 2:
-            x = x.unsqueeze(-1)
+        # Pass data through the RNN
+        rnn_out, _ = self.rnn(x)
 
-        # Step 1: Pass data through the RNN
-        # rnn_out contains the hidden states for EVERY step in the sequence.
-        # rnn_hidden is just the very last state. We want the full sequence.
-        rnn_out, rnn_hidden = self.rnn(x)
+        # Feed the RNN's full sequential output into the LSTM
+        _, (lstm_hidden, _) = self.lstm(rnn_out)
 
-        # Step 2: Feed the RNN's full sequential output into the LSTM
-        lstm_out, (lstm_hidden, lstm_cell) = self.lstm(rnn_out)
-
-        # Step 3: Extract the final hidden state of the LSTM for the fully connected layer
+        # Extract the final hidden state of the LSTM for the fully connected layer
         return self.fc(lstm_hidden[-1])
 
 
@@ -562,30 +544,20 @@ def evaluate_model(
 
 
 def predict_and_plot_series(
-        model: nn.Module,
+        model: torch.nn.Module,
         df_daily: pd.DataFrame,
         target_col: str,
-        test_loader: DataLoader,
-        scaler: MinMaxScaler,
+        test_loader: torch.utils.data.DataLoader,
+        scaler: Any,  # Replace Any with MinMaxScaler if imported directly
+        y_test_orig: np.ndarray,
         model_name: str,
         title: str,
-        save_directory: str
+        save_directory: str,
+        std_metrics: Optional[Dict[str, float]] = None
 ) -> plt.Figure:
     """
-    Generates and exports a line chart comparing the model's test predictions against reality.
-
-    Args:
-        model (nn.Module): The trained PyTorch model.
-        df_daily (pd.DataFrame): The full dataframe for historical plotting context.
-        target_col (str): The specific pollutant being plotted.
-        test_loader (DataLoader): The testing data.
-        scaler (MinMaxScaler): Scaler used to inverse transform predictions.
-        model_name (str): Model identifier for legends.
-        title (str): Output title for the plot.
-        save_directory (str): Destination folder for the image export.
-
-    Returns:
-        plt.Figure: The rendered Matplotlib figure.
+    Generates and exports a high-visibility, presentation-ready line chart.
+    Features a clean legend and a dedicated side-panel for Metrics & Hyperparameters.
     """
     model.eval()
     preds = []
@@ -593,31 +565,90 @@ def predict_and_plot_series(
         for X_batch, _ in test_loader:
             preds.append(model(X_batch.to(device)).cpu().numpy()[:, 0])
 
+    os.makedirs(save_directory, exist_ok=True)
+
     predictions_scaled = np.concatenate(preds).reshape(-1, 1)
     predictions_real = scaler.inverse_transform(predictions_scaled).flatten()
 
-    # Calculate index alignment for the plot
-    total_sequences = len(df_daily) - config.LOOK_BACK - config.HORIZON + 1
-    split_idx = int(total_sequences * (1 - config.TEST_FRACTION))
-    start_date_idx = split_idx + config.LOOK_BACK
+    end_date_idx = len(df_daily) - config.HORIZON + 1
+    start_date_idx = end_date_idx - len(predictions_real)
 
-    pred_dates = df_daily.index[start_date_idx: start_date_idx + len(predictions_real)]
+    # Guarantees pred_dates length is EXACTLY equal to predictions_real
+    pred_dates = df_daily.index[start_date_idx: end_date_idx]
+    true_data = df_daily[target_col].loc[pred_dates]
 
-    fig = plt.figure(figsize=(14, 6))
-    # plt.plot(df_daily.index, df_daily[target_col], color="lightgray", label="Observed Data", alpha=0.8)
-    plt.plot(pred_dates, df_daily[target_col].loc[pred_dates], color="black", label="True Future", linewidth=1.5)
-    plt.plot(pred_dates, predictions_real, color="red", label=f"{model_name} Forecast", linewidth=2.0)
-    plt.axvline(pred_dates[0], color="blue", linestyle="--", alpha=0.6, label="Test Split")
+    # Evaluate the metrics
+    metrics, _ = evaluate_model(model, test_loader, scaler, y_test_orig)
 
-    plt.title(title.replace('_', ' '), fontweight="bold")
-    plt.grid(True, linestyle="--", alpha=0.4)
-    plt.legend()
-    plt.tight_layout()
+    # --- 1. FORMAT DATA PANEL TEXT (Metrics + Hyperparameters) ---
+    if std_metrics:
+        metrics_text = (f"Model Performance\n"
+                        f"-----------------\n"
+                        f"RMSE: {metrics['RMSE']:.2f} ± {std_metrics['RMSE']:.2f}\n"
+                        f"MAE:  {metrics['MAE']:.2f} ± {std_metrics['MAE']:.2f}\n"
+                        f"MAPE: {metrics['MAPE']:.1f}% ± {std_metrics['MAPE']:.1f}%\n"
+                        f"R²:   {metrics['R^2']:.3f} ± {std_metrics['R^2']:.3f}")
+    else:
+        metrics_text = (f"Model Performance\n"
+                        f"-----------------\n"
+                        f"RMSE: {metrics['RMSE']:.2f}\n"
+                        f"MAE:  {metrics['MAE']:.2f}\n"
+                        f"MAPE: {metrics['MAPE']:.1f}%\n"
+                        f"R²:   {metrics['R^2']:.3f}")
 
-    os.makedirs(save_directory, exist_ok=True)
-    fig.savefig(os.path.join(save_directory, f"{title}.png"), dpi=150)
+    # Extract Hyperparameters from config
+    hp_text = (f"Hyperparameters\n"
+               f"---------------\n"
+               f"Look Back : {getattr(config, 'LOOK_BACK', 'N/A')}\n"
+               f"Horizon   : {getattr(config, 'HORIZON', 'N/A')}\n"
+               f"Batch Size: {getattr(config, 'BATCH_SIZE', 'N/A')}\n"
+               f"Layers    : {getattr(config, 'NUM_LAYERS', 'N/A')}\n"
+               f"Hidden Dim: {getattr(config, 'HIDDEN_DIM', 'N/A')}\n"
+               f"Learn Rate: {getattr(config, 'LEARNING_RATE', 'N/A')}")
+
+    # Combine into a single text block
+    info_panel_text = f"{metrics_text}\n\n{hp_text}"
+
+    # --- 2. SLIDESHOW PLOT SIZING ---
+    fig, ax = plt.subplots(figsize=(16, 9))
+
+    # Plot the Shaded Error Region
+    ax.fill_between(pred_dates, true_data, predictions_real,
+                    color='lightcoral', alpha=0.4, label="Prediction Error", zorder=1)
+
+    # Plot the main lines (Clean labels for the legend)
+    ax.plot(pred_dates, true_data, color="black", label="True Future Data", linewidth=4.0, zorder=2)
+    ax.plot(pred_dates, predictions_real, color="crimson", label=f"Forecast ({model_name})", linewidth=3.5,
+            linestyle="--", zorder=3)
+
+    # Add Context Markers
+    ax.axvline(pred_dates[0], color="royalblue", linestyle=":", linewidth=3.0, alpha=0.8, label="Test Split Start")
+
+    # --- 3. SLIDESHOW FORMATTING & LAYOUT ---
+    ax.set_xlabel("Date", fontsize=20, fontweight="bold", labelpad=15)
+    ax.set_ylabel(f"{target_col} - Concentration [μg/m³]", fontsize=20, fontweight="bold", labelpad=15)
+    ax.set_title(title.replace('_', ' '), fontweight="bold", fontsize=26, pad=20)
+
+    ax.tick_params(axis='x', labelsize=16, rotation=15)
+    ax.tick_params(axis='y', labelsize=16)
+    ax.grid(True, linestyle="-", alpha=0.3, linewidth=1.5, color="gray")
+
+    # Clean, simple legend placed inside the plot
+    legend = ax.legend(fontsize=18, loc="upper left", framealpha=0.9, edgecolor="black")
+
+    # --- 4. ATTACH THE STATISTICS PANEL ---
+    # Adjust the plot area to make room on the right side
+    plt.subplots_adjust(right=0.75)
+
+    # Place a text box strictly outside the data visualization area
+    props = dict(boxstyle='round,pad=0.8', facecolor='whitesmoke', alpha=0.95, edgecolor='silver')
+    ax.text(1.03, 0.5, info_panel_text, transform=ax.transAxes, fontsize=16,
+            verticalalignment='center', bbox=props, linespacing=1.6, family='monospace')
+
+    # Save with bbox_inches='tight' so it captures the new external text box
+    fig.savefig(os.path.join(save_directory, f"{title}.png"), dpi=300, bbox_inches='tight')
+
     return fig
-
 
 # =====================================================================
 # THE MASTER ORCHESTRATOR
@@ -627,25 +658,14 @@ def model_looping(
         pollutant_features_map: dict,
         pollutants: tuple = ("NO2", "NOx", "O3", "PM10", "PM25"),
         optimized: bool = False,
-        hyperparameter_file: Path = Path(OUTPUT_DIR/"best_parameters.json")
+        hyperparameter_file: Path = Path(OUTPUT_DIR / "best_parameters_mv.json")
 ) -> Dict[str, Any]:
     """
     Unified execution loop representing the final inference step of the ML pipeline.
     It iterates through all specified pollutants, fetches their specific explanatory weather
-    features from a dictionary, safely loads optimized hyperparameters (if available),
-    trains all four deep learning models, evaluates them, and dumps a consolidated Pickle
-    file for the comparison module.
-
-    Args:
-        df_daily (pd.DataFrame): Daily resampled dataset.
-        pollutant_features_map (dict): Dictionary mapping pollutants (keys) to their most
-                                       explicative environmental variables (list of strings).
-        pollutants (tuple): List of target pollutants to loop over.
-        optimized (bool): If True, forces the script to override defaults using the JSON file.
-        hyperparameter_file (Path): Path to the JSON containing Optuna's best results.
-
-    Returns:
-        Dict: A master dictionary containing performance metrics for every model across all pollutants.
+    features, safely loads optimized hyperparameters (if available), trains all models
+    (3 times if optimized to average stochastic variance), evaluates them, and dumps
+    a consolidated Pickle file for the comparison module. Includes Standard Deviation errors.
     """
     master_results = {"rnn_results": {}, "lstm_results": {}, "bilstm_results": {}, "gru_results": {},
                       "hy_rnn_lstm_results": {}, "cnn_results": {}, "hy-cnn-lstm_results": {}}
@@ -656,10 +676,9 @@ def model_looping(
         "LSTM": (LSTMModel, master_results["lstm_results"]),
         "Bi-LSTM": (BiLSTMModel, master_results["bilstm_results"]),
         "GRU": (GRUModel, master_results["gru_results"]),
-        "Hybrid-RNN-LSTM": (HybridRNNLSTMModel, master_results["hy_rnn_lstm_results"]),
+        "Hy-RNN-LSTM": (HybridRNNLSTMModel, master_results["hy_rnn_lstm_results"]),
         # "CNN": (CNNModel, master_results["cnn_results"]),
         # "Hybrid-CNN-LSTM":(HybridCNNLSTMModel, master_results["hy_rnn_lstm_results"])
-
     }
 
     # Load Hyperparameters safely into memory
@@ -671,6 +690,9 @@ def model_looping(
             logging.info(f"[✓] Loaded Optuna JSON: {hyperparameter_file.name}")
         except json.JSONDecodeError:
             logging.warning("[!] Corrupted JSON detected. Defaulting to standard config.")
+
+    # Determine how many times to train each model
+    num_iterations = 3 if optimized else 1
 
     # Execute training sweep
     for pollutant in pollutants:
@@ -723,33 +745,68 @@ def model_looping(
                 print(f" [!] Skipping {model_name}: {e}")
                 continue
 
-            # 4. Model Training (Pass dynamic num_features to the PyTorch architecture)
-            model = ModelClass(input_dim=num_features)
-            model, _, _ = train_model(model, train_loader, test_loader, model_name=f"MV-{model_name} ({pollutant})")
+            # =========================================================================
+            # 4. Model Training (Averaging Loop)
+            # =========================================================================
+            accumulated_metrics = {"RMSE": [], "MAE": [], "MAPE": [], "R^2": []}
+            best_model = None
+            best_mape = float('inf')
 
-            # 5. Evaluation & Visualization
-            metrics, _ = evaluate_model(model, test_loader, scaler, y_test_orig)
-            results_dict[pollutant] = metrics
-            print(
-                f" [✓] MV-{model_name} Metrics: RMSE={metrics['RMSE']:.2f}, MAE={metrics['MAE']:.2f},"
-                f" MAPE={metrics['MAPE']:.2f}%, R^2={metrics['R^2']:.2f}%\\n")
+            for iteration in range(num_iterations):
+                if num_iterations > 1:
+                    print(f"   [Iter {iteration + 1}/{num_iterations}] Training MV-{model_name}...")
 
+                # Instantiate a FRESH model so weights are properly re-initialized
+                model = ModelClass(input_dim=num_features)
+                model, _, _ = train_model(model, train_loader, test_loader, model_name=f"MV-{model_name} ({pollutant})")
+
+                # Evaluate this specific iteration
+                iter_metrics, _ = evaluate_model(model, test_loader, scaler, y_test_orig)
+
+                # Accumulate the scores
+                for key in accumulated_metrics.keys():
+                    accumulated_metrics[key].append(iter_metrics[key])
+
+                # Track the absolute best model instance to use for the final plot
+                if iter_metrics["MAPE"] < best_mape:
+                    best_mape = iter_metrics["MAPE"]
+                    best_model = model
+
+            # =========================================================================
+            # 5. Evaluation & Visualization Compilation (with Errors)
+            # =========================================================================
+            # Calculate the Mean and Standard Deviation (Error) across the iterations
+            avg_metrics = {k: float(np.mean(v)) for k, v in accumulated_metrics.items()}
+            std_metrics = {k: float(np.std(v)) for k, v in accumulated_metrics.items()}
+
+            # Save the average metrics to the main key (Keeps Part 4 Pipeline from crashing!)
+            results_dict[pollutant] = avg_metrics
+            # Safely tuck the Standard Deviations into a secondary key for analysis
+            results_dict[f"{pollutant}_std"] = std_metrics
+
+            print(f" [✓] MV-{model_name} Performance ({num_iterations} runs):")
+            print(f"     RMSE: {avg_metrics['RMSE']:.2f} ± {std_metrics['RMSE']:.2f}")
+            print(f"     MAE:  {avg_metrics['MAE']:.2f}  ± {std_metrics['MAE']:.2f}")
+            print(f"     MAPE: {avg_metrics['MAPE']:.2f}% ± {std_metrics['MAPE']:.2f}%")
+            print(f"     R^2:  {avg_metrics['R^2']:.3f} ± {std_metrics['R^2']:.3f}\n")
+
+            # Plot using the absolute BEST model instance from the runs
             fig = predict_and_plot_series(
-                model, df_daily, pollutant, test_loader, scaler,
+                best_model, df_daily, pollutant, test_loader, scaler, y_test_orig,
                 title=f"MV-{model_name} Prediction - {pollutant}",
-                save_directory=str(MV_DIR/pollutant), model_name=model_name
+                save_directory=str(MV_DIR / pollutant), model_name=model_name,
+                std_metrics=std_metrics # <--- [FIX] WE INJECT THE ERRORS HERE!
             )
 
             if __name__ == "__main__":
                 plt.close(fig)
 
     # 6. Export finalized metrics to Pickle for Part 4 Comparison
-    with open(OUTPUT_DIR/"mv_DL_results.pkl", "wb") as f:
+    with open(OUTPUT_DIR / "mv_DL_results.pkl", "wb") as f:
         pickle.dump(master_results, f)
     print("\n[✓] All Multivariate Neural Network results compiled and exported!")
 
     return master_results
-
 
 # =====================================================================
 # MAIN EXECUTION
