@@ -1,79 +1,87 @@
-# 🌤️ AirTS Forecast: Urban Air Quality Modeling & Deep Learning
+AirTS-Forecast: Climate Data Exploration & Analysis Pipeline
+Section 1: Data Gathering, Exploration, and Visualization
 
-AirTS Forecast is an end-to-end Machine Learning Operations (MLOps) and Time-Series Forecasting pipeline designed to assess and predict urban air pollution. By fusing environmental/meteorological data with historical pollution concentrations (NO2, NOx, O3, PM10, PM25), this project establishes robust, multi-objective predictive models to inform public health and environmental policies.
+A highly optimized, modular Python pipeline designed to ingest, process, and visualize 3D environmental climate data (Time, Latitude, Longitude) from HDF5 files (e.g., ERA5 datasets). This project leverages advanced data structures, vectorized Pandas operations, and Dependency Injection to create a fast, scalable, and memory-efficient ETL (Extract, Transform, Load) architecture.
 
-The pipeline compares classical statistical baselines against advanced sequential Deep Learning architectures, featuring automated hyperparameter optimization, reverse-anchored temporal alignment, and presentation-ready visual reporting.
+🚀 Key Features
+Auto-Discovering File System: Automatically parses directories using strict Regex (era5_3d_YYYY_MM.h5), validates data, and sorts files chronologically without requiring manual date inputs.
 
-## 🚀 Key Achievements & Capabilities
-Scale-Dependent Outlier Filtration: Eliminates simulation explosions (RMSE > 10^75) across various pollution emission scales to ensure absolute mathematical stability.
+Dependency Injection Architecture: Core reading loops are decoupled from mathematical operations. Mathematical models (like spatial averaging or timeseries flattening) are injected dynamically into the HDF5 readers as factory functions.
 
-Sequential Preprocessing: Guarantees zero index desynchronization across thousands of chronological samples using reverse-anchored timeline slicing and Fourier feature mapping.
+Vectorized Spatial Coarsening: Bypasses slow Python for loops by flattening 3D tensors into Pandas MultiIndex DataFrames, allowing underlying C++ libraries to handle spatial binning and granularity adjustments instantly.
 
-Deep Learning Optimization: Custom topologies (RNN, LSTM, Bi-LSTM, GRU, and Hybrids) validated through stochastic ensemble training to ensure tight stability margins (± standard deviation tracking).
+Automated Mathematical Modeling: Automatically attempts Levenberg-Marquardt optimization (scipy.optimize) to fit 12-month sinusoidal waves to regional timeseries, plotting idealized models when correlation exceeds 95%.
 
-Automated Hyperparameter DOE: Discovers Pareto-optimal frontiers (minimizing MAPE while maximizing R²) via 4^n Full Factorial Designs of Experiments and Optuna database search loops.
+Geographic Boundary Filtering: Utilizes OpenStreetMap (OSMnx) and Shapely to calculate high-precision geospatial polygons (e.g., Italy's borders) and generates interactive Folium HTML maps to visually verify granularity grids.
 
-Executive Visualization: Generates globally scale-synchronized, 16:9 presentation-ready matrices and residual error envelopes using Seaborn and Matplotlib.
+Automated Reporting: Exports statistics to multi-sheet Excel workbooks and compiles hundreds of 3D Matplotlib plots into centralized, multi-page PDF reports.
 
-## 📂 Repository Structure
+🗂️ Directory Structure
+The pipeline expects and generates the following directory structure:
+
 Plaintext
 AirTS-Forecast/
 │
-├── EnvironmentalDataAnalysis/               # Weather & Environmental Feature Engineering
-│   ├── Analysis 02 round/                   # EDA visual outputs and generated profiles
-│   ├── environmental_data_etl_extraction.py # 1. API/Data source extraction
-│   ├── environmental_data_etl_transform.py  # 2. Cleaning and temporal alignment
-│   ├── environmental_data_etl_loading_orchestration.py # 3. Final ETL pipeline execution
-│   ├── environmental_data_exp_analysis_controller.py   # Main EDA orchestrator
-│   ├── environmental_data_exp_retrieval.py             # Data fetching for EDA
-│   ├── environmental_data_exp_timeseries.py            # Feature timelines
-│   ├── environmental_data_exp_overall_monthly_avg.py   # Monthly seasonality analysis
-│   ├── environmental_data_exp_animated_period_evo.py   # Animated temporal evolution
-│   ├── environmental_data_exp_visualization_orchestration_core.py # Visual rendering engine
-│   └── recognizing_land.py (beta)           # Spatial/Land-use feature recognition
+├── era5_monthly_data/                     # Input directory for 3D HDF5 climate data
+│   ├── era5_3d_2004_06.h5
+│   └── era5_3d_2004_07.h5
 │
-├── PollutionDataAnalysis/                   # Pollution Forecasting & ML Optimization
-│   ├── pollution_data_exp_core.py           # Core time-series functions & metrics
-│   ├── pollution_data_exp_pollutants_comparison.py # Inter-pollutant correlation
-│   ├── pollution_data_exp_report.ipynb      # Interactive EDA report for pollutants
-│   ├── Pollution_data_ARIMA_Lucas.py        # Classical Modeling: Original Baseline (Lucas)
-│   ├── Pollution_data_ARIMA.py              # Classical Modeling: Extended DOE & Optimization
-│   ├── pollution_DL_models_single_variable.py      # Univariate DL Pipeline (Pollution autoregression)
-│   ├── pollution_DL_models_multivariate.py         # Multivariate DL Pipeline (Pollution + Weather)
-│   ├── Pollution_DL_models_hyperparameter_search.py # Optuna Bayesian Optimization Engine
-│   └── pollution_DL_model_comparison.py     # Final Evaluation: SV vs MV vs Classical Models
+├── Excel exported statistical summaries/  # Auto-generated Excel reports
+├── Exported pdf plots/                    # Auto-generated multi-page 3D PDF plots
 │
-├── Pollution_environmental_data_merging.py  # Central script merging Weather + Pollution datasets
-├── Pollution_DL_models_report.ipy           # Executive summary notebook for DL models
-├── Project_Charter.md                       # Project scope, objectives, and stakeholder info
-└── README.md                                # You are here!
-## 🧠 Core Modules
-1. Data Engineering (ETL & Merging)
-Located in EnvironmentalDataAnalysis and the root directory. This module handles the automated extraction, transformation, and loading of raw meteorological data. Pollution_environmental_data_merging.py serves as the crucial bridge, aligning diverse timestamps and resolving missing values to create the master multivariate dataset.
+├── environmental_data_retrieval.py        # Core Engine: HDF5 I/O & File Routing
+├── environmental_monthly_mean_analysis.py # Module: Spatial Statistics & 3D Plots
+├── environmental_data_2d_timeplots.py     # Module: Timeseries & Sinusoidal Fitting
+└── italy_grid_classification.py           # Module: OSMnx Geographic Boundary Masking
+📦 Dependencies
+Ensure you have the following libraries installed. It is recommended to use a virtual environment (venv or conda).
 
-2. Exploratory Data Analysis (EDA)
-Highly modularized visual exploration. Evaluates seasonal trends, monthly averages, and spatial correlations to determine the optimal subset of environmental features to feed into the forecasting models.
+Bash
+pip install numpy pandas h5py matplotlib scipy openpyxl osmnx shapely folium geopandas
+🧩 Module Overview
+1. Core Engine (environmental_data_retrieval.py)
+The backbone of the pipeline. It handles safe HDF5 file opening, Regex-based file name comprehension, and directory exploration. It exposes file_var_retrieval, a higher-order function that accepts Callable math functions to execute against datasets.
 
-3. Classical Time-Series Baselines 
-Scripts utilizing ARIMA, SARIMA, and Holt-Winters architectures. These models establish the performance floor, utilizing exact mathematical derivation and Response Surface Methodology (RSM) for grid tuning.
+2. Spatial Analysis (environmental_monthly_mean_analysis.py)
+Handles the generation of spatial tables (Lat x Lon).
 
-4. Deep Learning & Hyperparameter Search
-The core predictive engine. Implements univariate (SV) and multivariate (MV) PyTorch models. The Pollution_DL_models_hyperparameter_search.py script utilizes Optuna backed by an SQLite database to dynamically navigate complex hyperparameter spaces (Look Back, Horizon, Layers, Batch Size) with automated pruning and SQLite collision safeguards.
+Math: Calculates Grand Means, Zonal Means (Latitudinal), and Meridional Means (Longitudinal).
 
-## 🛠️ Tech Stack & Libraries
-Language: Python 3.10+
+Visuals: Generates interactive 3D surface plots with 2D shadow contours mapped to the ocean floor.
 
-Deep Learning: PyTorch (torch, torch.nn)
+Exports: Routes spatial data to .xlsx files and compiles .pdf visualization reports.
 
-Optimization & DOE: Optuna, Statsmodels
+3. Timeseries Analysis (environmental_data_2d_timeplots.py)
+Tracks the temporal evolution of specific regions over time.
 
-Data Manipulation: Pandas, NumPy, Scikit-Learn
+Vectorization: Flattens spatial axes using Pandas MultiIndexes to instantly calculate regional binning.
 
-Visualization: Matplotlib, Seaborn, Jupyter
+Period Concatenation: Seamlessly stitches together months/years of data into a continuous pd.DataFrame timelines using pd.concat.
 
-MLOps Tracking: Pickle, JSON configuration pipelines
+Sinusoidal Fitting: Uses scipy.optimize.curve_fit to overlay perfect 12-month trigonometric waves on highly correlated regions, printing the mathematical equations directly to the console.
 
-👥 Contributors
-Tiago Toloczko Ross - Data Engineering, Deep Learning Architecture, Optuna Integration, and ML-Ops Pipeline.
+4. Geographic Masking (italy_grid_classification.py)
+Ensures data is geographically relevant.
 
-Lucas Reinoso Urabayen - Classical Model deployment and initial statistical foundations.
+Boundary Extraction: Fetches highly accurate national borders (Italy) using OpenStreetMap data.
+
+Grid Validation: Tests mathematical grid coordinates against Shapely Polygons (polygon.contains(point)).
+
+Map Generation: Spits out an interactive Folium HTML map overlaying the valid (Green) and invalid (Red) grid intersections over a CartoDB basemap.
+
+🛠️ Usage Examples
+Each module is designed to be executable as a standalone script for testing or imported as part of a larger pipeline.
+
+To test the geographic grid and generate a visual map:
+
+Bash
+python italy_grid_classification.py
+To generate 3D spatial plots and export Excel/PDF reports for a specific file:
+
+Bash
+python environmental_monthly_mean_analysis.py
+To extract continuous timeseries across an entire folder of data and fit sinusoidal curves:
+
+Bash
+python environmental_data_2d_timeplots.py
+Part of the AirTS-Forecast Project. Designed for robust, fail-fast environmental data processing.
